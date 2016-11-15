@@ -1,0 +1,337 @@
+# FEEL FREE TO CHANGE THE CODE. 
+# This is just a dull example
+
+# ------------------------------------------------------------------------------   
+# Start listening and handle incoming connections in board() function
+# ------------------------------------------------------------------------------   
+def start_board():
+  ip = mycontext['ip']
+  port = mycontext['port']
+  print "Listening on IP " + str(ip) +" port " + str(port)
+  try: 
+    listencommhandle = waitforconn(ip, port, board_connection_handler)
+  except Exception, e:
+    print "Exception in start_board: %s, %s\n" %(type(e), e)
+    raise
+    #pass
+
+# ------------------------------------------------------------------------------    
+# Called when an incoming message is received. 
+# --> Important starting point
+# ------------------------------------------------------------------------------    
+def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+    msgheader = sockobj.recv(1024) # Receive message
+    print '****Request:\n%s' % msgheader
+    # React depending on message type: HTTP GET or POST, or some other type of communication.
+    #----From the browser----
+    if msgheader.startswith( 'GET' ):
+      get_board_handler(msgheader, sockobj, thiscommhandle)
+
+    elif msgheader.startswith( 'POST /board' ):
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      add_entry(parameters['entry'])
+      send_to_vessels(sockobj,thiscommhandle,parameters['entry'],0,1)
+
+
+    elif msgheader.startswith( 'POST /entries' ):
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      entryID=msgheader.split('/')[2].split(' ')[0]
+
+      if parameters['delete']==str(1):
+        delete_entry(entryID)
+        send_to_vessels(sockobj, thiscommhandle, "", entryID, 2)
+      elif parameters['delete']==str(0): 
+        modify_entry(parameters['entry'], entryID)
+        send_to_vessels(sockobj, thiscommhandle, parameters['entry'], entryID, 3) 
+
+    #----From other vessels-----    
+    elif msgheader.startswith( 'ReceiveFromVessel' ):
+      splitmessage = msgheader.split('-')
+      mycontext['id'] = int(splitmessage[1])-1 
+      # join again if message contains "-"  
+      add_entry(''.join(splitmessage[2:])) 
+
+    elif msgheader.startswith( 'DeleteFromVessel' ):
+      delete_entry(msgheader.split('-')[1])
+
+    elif msgheader.startswith( 'ModifyFromVessel' ):
+      splitmessage = msgheader.split('-')
+      entryID = int(splitmessage[1])
+      # join again if message contains "-"
+      modify_entry(''.join(splitmessage[2:]), entryID)
+
+    else:
+      other_requests_handler(msgheader, sockobj, thiscommhandle)
+
+  except Exception, e:
+    print "Exception in board: %s, %s\n" %(type(e), e)
+    #raise
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def get_board_handler(msgheader, sockobj, thiscommhandle):
+  htmlresponse = generate_html_page()
+  res=make_http_response(200, 'OK', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# Update mycontext['entries'], using mycontext['ids'] to loop 
+# ---------------------------------------------------------------------------
+def update_entries():
+  mycontext['entries']=""
+  for entryID in mycontext['ids']:
+    entryFormat  = mycontext['entry_template'] %('entries/%d' % (entryID), entryID, mycontext['idhash'][entryID])
+    mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# Adding entries to hash, then updating 
+# ---------------------------------------------------------------------------
+def add_entry(entry):
+  mycontext['id'] = mycontext['id'] + 1 
+  mycontext['ids'].append(mycontext['id']) 
+  mycontext['idhash'][mycontext['id']]= entry 
+  update_entries()
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# Deleting entries from hash, then updating  
+# ---------------------------------------------------------------------------
+def delete_entry(entryID):
+  if int(entryID) in mycontext['ids']:
+    del mycontext['idhash'][int(entryID)]
+    mycontext['ids'].remove(int(entryID))
+    update_entries()
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# Modifying entries in the hash, then updating  
+# --------------------------------------------------------------------------
+def modify_entry(entry,entryID):
+  mycontext['idhash'][int(entryID)] = entry
+  update_entries()
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# Sends to other vessels 
+# action = 1 : INSERT  
+# action = 2 : DELETE
+# action = 3 : MODIFY
+# ----------------------------------------------------------------------------  
+
+def send_to_vessels(sockobj,thiscommhandle,entry,entryID,action):
+  for sock in mycontext['vessels']:
+    try:
+      if action == 1: 
+        socketobject = openconn(sock[0],sock[1])
+        socketobject.send('ReceiveFromVessel-' + str(mycontext['id']) +'-'+ entry)
+      elif action == 2:   
+        socketobject = openconn(sock[0],sock[1])    
+        socketobject.send('DeleteFromVessel-' + entryID)
+      elif action == 3:
+        socketobject = openconn(sock[0],sock[1])
+        socketobject.send('ModifyFromVessel-' + entryID + '-' + entry)
+      socketobject.close()
+    except:
+      print "error in connection"
+  res=make_http_response(200,'OK','')
+  sockobj.send(res)
+  stopcomm(thiscommhandle)
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# Ring topology
+# Send to vessels on your right in the 'ring'-array 
+# ----------------------------------------------------------------------------  
+#send to (mycontext['ring'].index(mycontext['ip']) + 1) % len(mycontext['ring']) 
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# elect_leader()  
+# ----------------------------------------------------------------------------  
+def elect_leader():
+  try: 
+    listencommhandle = waitforconn(mycontext['ip'], mycontext['port'], wait_for_incoming_vote)
+    #some timer before sending so that others have booted? 
+    init_election()
+  except Exception, e:
+    print "Exception in start_board: %s, %s\n" %(type(e), e)
+    raise
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# wait_for_incoming_vote(), callback function 
+# when all have voted, close open connection(kill thread)
+# and release lock 
+# ----------------------------------------------------------------------------  
+def wait_for_incoming_vote(ip,port,thiscommhandle,listencommhandle):
+  msgheader = sockobj.recv(1024)
+  splitmsg = msgheader.split('-')
+  ring = splitmsg[2:]
+  if splitmsg[0] == 'Election':
+    # ----my message----    
+    if splitmsg[1]==mycontext['ip']:
+      #----choose leader----
+      if len(ring) == len(mycontext['ring']):
+        ring.sort()
+        mycontext['leader'] = ring[len(ring)-1] 
+        stopcomm(listencommhandle)
+        mycontext['stoplock'].release()
+      else:
+        print "did not get all messages"
+    else:
+      #----add generated number----
+      msgheader = msgheader + '-' + str(mycontext['random'])
+      try: 
+        socketobject = openconn(mycontext['recIp'],mycontext['port'])
+        socketobject.send(msgheader)
+        socketobject.close()
+      except: 
+        print "something went wrong"
+  else:
+    print "did not get Election header"
+  res=make_http_response(200,'OK','')
+  sockobj.send(res)
+  stopcomm(thiscommhandle)  
+
+# ------------------------------------------------------------------------------
+# OUR IMPLEMENTATION
+# send_to_next_in_ring(), asynchronous   
+# ----------------------------------------------------------------------------    
+def init_election():
+  try: 
+    socketobject = openconn(mycontext['recIp'],mycontext['port'])
+    socketobject.send('Election-' + str(mycontext['ip']) + '-' + str(mycontext['random']))
+    socketobject.close()
+  except:
+      print "error ring-connection"
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def other_requests_handler(msgheader, sockobj, thiscommhandle):
+  # extract the query from the HTTP request  
+  query = extract_http_request_contents(msgheader)
+  # extract the query parameters
+  parameters = extract_parameters_from_query(query)
+  
+  template = file("other_requests_template.html").read()
+  htmlresponse = template % ("404 Not Found\n" + msgheader)
+  res=make_http_response(404, 'Not Found', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Wrap into HTTP headers
+# ------------------------------------------------------------------------------
+def make_http_response(status, status_text, htmlresponse):
+    response_template = "HTTP/1.1 %d %s\r\nContent-type: text/html\r\nContent-length: %i\r\n\r\n%s"
+    return response_template % (status, status_text, len(htmlresponse), htmlresponse)
+
+# ------------------------------------------------------------------------------
+# Utility function to extract the contents (payload) from HTTP request
+# ------------------------------------------------------------------------------
+def extract_http_request_contents(header):
+  # find content length
+  conent_length = header.split('Content-Length: ')[1]
+  conent_length = int(conent_length.split('\r\n')[0])
+  
+  # extract the http response body and discard the header
+  contetns = header[-conent_length:]
+  return contetns
+
+# ------------------------------------------------------------------------------
+# Utility function to extract query parameter from HTML query
+# ------------------------------------------------------------------------------
+def extract_parameters_from_query(msg):
+  # extract the query parameters as a dictionary: {name:value}
+  # example input format: comment=aa&ip=127.0.0.1&port=63101&action=Delete
+  parameters={}
+  arr = msg.split('&')
+  for a in arr:
+    pp = a.split('=')
+    if len(pp)>1:
+      parameters[pp[0]] = pp[1]
+  return parameters
+
+# ------------------------------------------------------------------------------
+# Outputs the blackboard html 
+# ------------------------------------------------------------------------------   
+def generate_html_page():
+  
+  # dynamic title showing Ip address, port and up time. 
+  title='Sample board @ %s:%d. Up time: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()) )
+  content = mycontext['boardcontents_template'] %( title, mycontext['entries'] )
+  fullpage_h = mycontext['frontpage_header_template'] + content
+  fullpage = fullpage_h + mycontext['frontpage_footer_template'] % mycontext['authors']
+  #print entries, content, fullpage
+  return fullpage
+  
+# ------------------------------------------------------------------------------    
+# Main entry point of the program. Initalizes global variables in mycontext
+# and calls start_board() which opens a socket for incoming connections.
+# ------------------------------------------------------------------------------
+if callfunc == 'initialize':
+  # whenever this vessel gets a connection on its IP:port it'll call function board_connection_handler
+  if len(callargs) == 1 or len(callargs) == 2:
+    port = int(callargs[0])
+    if len(callargs) == 2:
+      ip=str(callargs[1])
+    else:
+      try:
+        ip = getmyip()
+      except Exception, e:
+        print "Could not get an IP\n"
+        print (type(e), e)
+        raise
+  
+  # Fail if we don't have 1 or 2 arguments  
+  else:
+    raise Exception("Give correct arguments")
+  
+  #Own variables
+  #global variable for entries
+  mycontext['entries'] = ""
+  
+  #count entries 
+  mycontext['id'] = 0
+  
+  #Vessels on the same network
+  #'ids' is used for looping the hash   
+  mycontext['ids'] = []
+  idhash = {}
+  mycontext['idhash'] = idhash 
+  mycontext['vessels'] = []
+  mycontext['votes'] = []
+  mycontext['ring'] = []
+  mycontext['random'] = randomfloat()
+  mycontext['stoplock'] = getlock()
+
+  vessels = file("neighborlist.txt").read().split()
+  for line in vessels:
+    mycontext['ring'].append(line)
+    if(ip != line):
+      mycontext['vessels'].append((line,port))
+
+  #Initialize Port and IP
+  mycontext['port'] = port
+  mycontext['ip'] = ip
+
+  mycontext['recIp'] = mycontext['ring'][(mycontext['ring'].index(mycontext['ip']) + 1) % len(mycontext['ring'])]
+
+  
+  #read html template files
+  mycontext['entry_template'] = file("entry_template.html").read()
+  mycontext['boardcontents_template'] = file("boardcontents_template.html").read()
+  mycontext['frontpage_header_template'] = file("board_frontpage_header_template.html").read()
+  mycontext['frontpage_footer_template'] = file("board_frontpage_footer_template.html").read()
+
+  mycontext['authors'] = "sample author"
+  
+  mycontext['stoplock'].acquire() # acquire the lock
+  elect_leader()                #lock other threads than spawned by waitforconn
+  start_board()
+  
