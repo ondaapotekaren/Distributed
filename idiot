@@ -1,0 +1,6 @@
+#!/bin/bash
+# My first script
+curl "http://139.80.206.133:63118/board" -d entry=hej1111 && echo "hej0" &
+curl "http://128.208.4.198:63118/board" -d entry=hej0000 && echo "hej1" &
+wait
+#echo "Hello World!"

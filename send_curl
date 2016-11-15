@@ -1,0 +1,4 @@
+#!/bin/bash
+for i in `seq 1 20`; do
+curl -d 'entry=t'${i} -X 'POST' 'http://130.253.21.121:63118/entries'
+done
