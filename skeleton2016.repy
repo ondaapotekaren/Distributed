@@ -48,7 +48,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     elif msgheader.startswith( 'POST /entries' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-      entryID=msgheader.split('/')[2].split(' ')[0]
+      entryID = msgheader.split('/')[2].split(' ')[0]
 
       if parameters['delete']==str(1):
         delete_entry(entryID)
@@ -57,15 +57,15 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
         modify_entry(parameters['entry'], entryID)
         send_to_vessels(parameters['entry'], entryID, 3) 
 
-      res=make_http_response(200,'OK','')
+      res = make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
     #----From other vessels-----    
     elif msgheader.startswith( 'ReceiveFromVessel' ):
-      splitmessage = msgheader.split('-')
-      mycontext['id'] = int(splitmessage[1])-1 
+      splitmsg = msgheader.split('-')
+      mycontext['id'] = int(splitmsg[1])-1 
       # join again if message contains "-"  
-      add_entry(''.join(splitmessage[2:])) 
+      add_entry(''.join(splitmsg[2:])) 
 
     elif msgheader.startswith( 'DeleteFromVessel' ):
       print "Entry id: " + msgheader.split('-')[1]
@@ -74,35 +74,42 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 
     elif msgheader.startswith( 'ModifyFromVessel' ):
       print "-----MODIFYFROMVESSEL------"
-      splitmessage = msgheader.split('-')
-      entryID = int(splitmessage[1])
+      splitmsg = msgheader.split('-')
+      entryID = int(splitmsg[1])
       # join again if message contains "-"
-      modify_entry(''.join(splitmessage[2:]), entryID)
+      modify_entry(''.join(splitmsg[2:]), entryID)
       
     #----LEADER ELECTION----
     # Election/startID/leaderID/randomNumber
     elif msgheader.startswith( 'Election'):
-      print "----LEADER ELECTION----"
-      splitmessage = msgheader.split('/')
-      if splitmessage[1] == str(mycontext['identifier']):
-        mycontext['leader']=splitmessage[2]
-        start_coordination()
+      splitmsg = msgheader.split('/')
+      if splitmsg[1] == str(mycontext['identifier']):
+        mycontext['leader'] = splitmsg[2]
+        start_coordination(mycontext['identifier'],)
         print "leader: " + mycontext['leader']
         print "identifier: " + mycontext['identifier']
         print "my random: " + str(mycontext['random'])
       else: 
-        forward_message(mycontext['identifier'],splitmessage)   
+        forward_election(mycontext['identifier'],splitmsg)   
 
     elif msgheader.startswith( 'Coordination'):    
-      #----Jan Guillou-----
-      #----send msg, if coordination is wrogn init leader.     
-      print "hej"
+      #----send msg, if coordination is wrong init leader election. 
+      #----Coordination/startID/leaderID---- 
+      splitmsg = msgheader.split('/')
+      if splitmsg[1] == str(mycontext['identifier']):
+      	if mycontext['leader'] == splitmsg[2]:
+      		print "Correct leader choosen: " + mycontext['leader']
+      	else:
+      		init_election(mycontext['identifer'])
+      else: 
+      	forward_coordination(mycontext['identifier'],splitmsg) 
+
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
 
   except Exception, e:
     print "Exception in board: %s, %s\n" %(type(e), e)
-    #raise
+
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------
@@ -183,7 +190,7 @@ def init_election(vessel):
   sendVessel = get_send_vessel(vessel)
   #print mycontext['sendVessel']
   try:  
-    if not mycontext['local']: 
+    if mycontext['global']: 
       socketobject = openconn(sendVessel,mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
@@ -194,35 +201,35 @@ def init_election(vessel):
     init_election(sendVessel)
 
 # ------------------------------------------------------------------------------
-# forwards message 
+# Forwards message 
 # Election/startID/leaderID/randomNumber
 # ------------------------------------------------------------------------------
-def forward_message(vessel,msg):
+def forward_election(vessel,splitmsg):
   sendVessel = get_send_vessel(vessel)
   try:
-    if not mycontext['local']: 
+    if mycontext['global']: 
       socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
       #--my number is bigger       
-    if mycontext['random'] > int(msg[3]) :
-      sendmsg = '/'.join(msg[:2]) + '/' + str(mycontext['identifier']) + '/' + str(mycontext['random']) 
+    if mycontext['random'] > int(splitmsg[3]) :
+      sendmsg = '/'.join(splitmsg[:2]) + '/' + str(mycontext['identifier']) + '/' + str(mycontext['random']) 
     else:
-      sendmsg = '/'.join(msg)
+      sendmsg = '/'.join(splitmsg)
     socketobject.send(sendmsg)  
     socketobject.close()
   except Exception, e:
     print "Exception foward_message: %s, %s\n" %(type(e), e)
-    forward_message(sendVessel,msg)
+    forward_election(sendVessel,splitmsg)
 
 # ------------------------------------------------------------------------------
-# coordinates message 
+# Starts to send coordination message 
 # Coordination/startID/leaderID
 # ------------------------------------------------------------------------------
-def start_coordination(vessel,msg):
+def start_coordination(vessel):
   sendVessel = get_send_vessel(vessel)
   try:
-    if not mycontext['local']: 
+    if mycontext['global']: 
       socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
@@ -230,14 +237,31 @@ def start_coordination(vessel,msg):
     socketobject.close()
   except Exception, e:
     print "Exception foward_message: %s, %s\n" %(type(e), e)
-    start_coordination(sendVessel,msg)
+    start_coordination(sendVessel)
 
 # ------------------------------------------------------------------------------
-# Updates IP to send to on the ring
+# Starts to send coordination message 
+# Coordination/startID/leaderID
+# ------------------------------------------------------------------------------
+def forward_coordination(vessel,splitmsg):
+	sendVessel = get_send_vessel(vessel)
+	try:
+		if mycontext['global']:
+			socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
+		else:
+			socketobject = openconn(mycontext['ip'],int(sendVessel))
+		socketobject.send('/'.join(splitmsg))
+		socketobject.close()
+	except Exception, e:
+		print "Exception foward_message: %s, %s\n" %(type(e), e)	
+		forward_coordination(sendVessel,splitmsg) 
+		
+# ------------------------------------------------------------------------------
+# Updates IP/port to send to on the ring
 # ------------------------------------------------------------------------------
 def get_send_vessel(vessel):
-  #mycontext['sendVessel'] = mycontext['ring'][(mycontext['ring'].index(vessel)+1)%len(mycontext['ring'])]
   return mycontext['ring'][(mycontext['ring'].index(vessel)+1)%len(mycontext['ring'])]
+
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------
@@ -342,13 +366,13 @@ if callfunc == 'initialize':
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
   mycontext['sendVessel'] = 0
-  mycontext['local'] = True
+  mycontext['global'] = False
   #Initialize Port and IP
   mycontext['port'] = port
   mycontext['ip'] = ip
   mycontext['identifier']=''
 	
-  if not mycontext['local']:
+  if mycontext['global']:
     vessels = file("neighborlist.txt").read().split()
     mycontext['identifier'] = str(ip) 
     for line in vessels:
