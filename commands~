@@ -1,5 +1,5 @@
-loadkeys isak
-as isak
+loadkeys isaker
+as isaker
 browse 
 on browsegood
 upload boardcontents_template.html

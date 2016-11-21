@@ -1,0 +1,11 @@
+#!/bin/bash
+loadkeys isaker
+as isaker
+browse 
+on browsegood
+upload boardcontents_template.html
+upload board_frontpage_footer_template.html
+upload board_frontpage_header_template.html
+upload entry_template.html
+upload html_snapshot.html
+upload neighborlist.txt 

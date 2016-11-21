@@ -225,7 +225,7 @@ def forward_election(vessel,splitmsg):
   sendVessel = get_send_vessel(vessel)
   try:
     if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
+      socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
       #--my number is bigger       
@@ -247,7 +247,7 @@ def start_coordination(vessel):
   sendVessel = get_send_vessel(vessel)
   try:
     if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
+      socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
     socketobject.send('Coordination/' + mycontext['identifier'] + '/' + mycontext['leader'])
@@ -264,7 +264,7 @@ def forward_coordination(vessel,splitmsg):
 	sendVessel = get_send_vessel(vessel)
 	try:
 		if mycontext['global']:
-			socketobject = openconn(sendVessel,mycontext['port'])
+			socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
 		else:
 			socketobject = openconn(mycontext['ip'],int(sendVessel))
 		socketobject.send('/'.join(splitmsg))
@@ -404,7 +404,7 @@ if callfunc == 'initialize':
   mycontext['ring'] = []
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
-  #mycontext['sendVessel'] = 0
+  mycontext['sendVessel'] = 0
   mycontext['global'] = True
   #Initialize Port and IP
   mycontext['port'] = port
