@@ -34,10 +34,11 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       if(mycontext['identifier']==mycontext['leader']):
-        mycontext['stoplock'].acquire()
-        add_entry(parameters['entry'])
+        #mycontext['stoplock'].acquire()
+        mycontext['id']=mycontext['id']+1 
+        add_entry(parameters['entry'],mycontext['id'])
         send_to_vessels(parameters['entry'],0,1)
-        mycontext['stoplock'].release()
+        #mycontext['stoplock'].release()
       else: 
         send_to_leader(parameters['entry'],0,1)
       res=make_http_response(200,'OK','')
@@ -50,14 +51,14 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)
       entryID = msgheader.split('/')[2].split(' ')[0]
       if(mycontext['identifier']==mycontext['leader']):
-        mycontext['stoplock'].acquire()
+        #mycontext['stoplock'].acquire()
         if parameters['delete']==str(1):
           delete_entry(entryID)
           send_to_vessels("", entryID, 2)
         elif parameters['delete']==str(0): 
           modify_entry(parameters['entry'], entryID)
           send_to_vessels(parameters['entry'], entryID, 3) 
-        mycontext['stoplock'].release()
+        #mycontext['stoplock'].release()
       else: 
         if parameters['delete']==str(1):
           send_to_leader("",entryID,2)
@@ -69,11 +70,12 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 
     #----As leader----
     elif msgheader.startswith('ReceiveAsLeader'):
-      mycontext['stoplock'].acquire()      
+      #mycontext['stoplock'].acquire()      
       splitmsg = msgheader.split('/')  
       #----ReceiveAsLeader/ADD/entry   
-      if(splitmsg[1]=="INSERT"):              
-        add_entry(splitmsg[2])
+      if(splitmsg[1]=="INSERT"):
+        mycontext['id']=mycontext['id']+1            
+        add_entry(splitmsg[2],mycontext['id'])
         send_to_vessels(splitmsg[2],0,1)
       #----ReceiveAsLeader/MODIFY/entryID/entry
       elif(splitmsg[1]=="MODIFY"):
@@ -83,14 +85,14 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       elif(splitmsg[1]=="DELETE"):
         delete_entry(splitmsg[2])
         send_to_vessels("", splitmsg[2], 2)  
-      mycontext['stoplock'].release()
+      #mycontext['stoplock'].release()
 
      #----From other vessels-----  
     elif msgheader.startswith( 'ReceiveFromVessel' ):
       splitmsg = msgheader.split('-')
-      mycontext['id'] = int(splitmsg[1])-1 
+      #mycontext['id'] = int(splitmsg[1])-1 
       # join again if message contains "-"  
-      add_entry(''.join(splitmsg[2:])) 
+      add_entry(''.join(splitmsg[2:]),int(splitmsg[1])) 
 
     elif msgheader.startswith( 'DeleteFromVessel' ):
       print "Entry id: " + msgheader.split('-')[1]
@@ -145,13 +147,15 @@ def update_entries():
   for entryID in mycontext['ids']:
     entryFormat  = mycontext['entry_template'] %('entries/%d' % (entryID), entryID, mycontext['idhash'][entryID])
     mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+  mycontext['stoplock'].release()
 
 # ------------------------------------------------------------------------------
 # OUR IMPLEMENTATION
 # Adding entries to hash, then updating 
 # ---------------------------------------------------------------------------
-def add_entry(entry):
-  mycontext['id'] = mycontext['id'] + 1 
+def add_entry(entry,entryID):
+  mycontext['stoplock'].acquire()
+  mycontext['id'] = entryID 
   mycontext['ids'].append(mycontext['id']) 
   mycontext['idhash'][mycontext['id']]= entry 
   update_entries()
@@ -161,6 +165,7 @@ def add_entry(entry):
 # Deleting entries from hash, then updating  
 # ---------------------------------------------------------------------------
 def delete_entry(entryID):
+  mycontext['stoplock'].acquire()
   if int(entryID) in mycontext['ids']:
     del mycontext['idhash'][int(entryID)]
     mycontext['ids'].remove(int(entryID))
@@ -170,6 +175,7 @@ def delete_entry(entryID):
 # Modifying entries in the hash, then updating  
 # --------------------------------------------------------------------------
 def modify_entry(entry,entryID):
+  mycontext['stoplock'].acquire()
   mycontext['idhash'][int(entryID)] = entry
   update_entries()
 
@@ -225,7 +231,7 @@ def forward_election(vessel,splitmsg):
   sendVessel = get_send_vessel(vessel)
   try:
     if mycontext['global']: 
-      socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
+      socketobject = openconn(sendVessel,mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
       #--my number is bigger       
@@ -247,7 +253,7 @@ def start_coordination(vessel):
   sendVessel = get_send_vessel(vessel)
   try:
     if mycontext['global']: 
-      socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
+      socketobject = openconn(sendVessel,mycontext['port'])
     else:
       socketobject = openconn(mycontext['ip'],int(sendVessel))
     socketobject.send('Coordination/' + mycontext['identifier'] + '/' + mycontext['leader'])
@@ -264,7 +270,7 @@ def forward_coordination(vessel,splitmsg):
 	sendVessel = get_send_vessel(vessel)
 	try:
 		if mycontext['global']:
-			socketobject = openconn(mycontext['sendVessel'],mycontext['port'])
+			socketobject = openconn(sendVessel,mycontext['port'])
 		else:
 			socketobject = openconn(mycontext['ip'],int(sendVessel))
 		socketobject.send('/'.join(splitmsg))
@@ -404,8 +410,8 @@ if callfunc == 'initialize':
   mycontext['ring'] = []
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
-  mycontext['sendVessel'] = 0
-  mycontext['global'] = True
+  #mycontext['sendVessel'] = 0
+  mycontext['global'] = False
   #Initialize Port and IP
   mycontext['port'] = port
   mycontext['ip'] = ip
