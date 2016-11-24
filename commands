@@ -8,5 +8,5 @@ upload board_frontpage_header_template.html
 upload entry_template.html
 upload html_snapshot.html
 upload neighborlist.txt 
-
+run skeleton2016.repy 63159
 
