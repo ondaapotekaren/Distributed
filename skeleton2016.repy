@@ -11,7 +11,6 @@ def start_board():
   print "Listening on IP " + str(ip) +" port " + str(port)
   try:   
     listencommhandle = waitforconn(ip, port, board_connection_handler)  
-    settimer(5,init_election,[mycontext['identifier']])
   except Exception, e:
     print "Exception in start_board: %s, %s\n" %(type(e), e)
     raise
@@ -33,15 +32,9 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     elif msgheader.startswith( 'POST /board' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-     	#----Add entry to board if leader, otherwise send message to leader 
-      if(mycontext['identifier']==mycontext['leader']):
-        mycontext['stoplock'].acquire()
-        mycontext['id']=mycontext['id']+1 
-        add_entry(parameters['entry'],mycontext['id'])
-        send_to_vessels(parameters['entry'],mycontext['id'],1,3)
-        mycontext['stoplock'].release()
-      else: 
-        send_to_leader(parameters['entry'],0,1,3)
+      mycontext['id'] = mycontext['id'] + 1 
+      add_entry(parameters['entry'],mycontext['id'])
+			send_to_vessels(parameters['entry'],mycontext['id'],1,3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
@@ -52,92 +45,43 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)
       entryID = msgheader.split('/')[2].split(' ')[0]
       #----Delete or modify entry on the board if leader, otherwise send message to leader
-      if(mycontext['identifier']==mycontext['leader']):
-        mycontext['stoplock'].acquire()
-        if parameters['delete']==str(1):
-          delete_entry(entryID)
-          send_to_vessels("", entryID, 2,10)
-        elif parameters['delete']==str(0): 
-          modify_entry(parameters['entry'], entryID)
-          send_to_vessels(parameters['entry'], entryID, 3,3) 
-        mycontext['stoplock'].release()
-      else: 
-        if parameters['delete']==str(1):
-          send_to_leader("",entryID,2,3)
-        elif parameters['delete']==str(0):
-          send_to_leader(parameters['entry'],entryID,3,3) 
+      if parameters['delete']==str(1):
+        delete_entry(entryID)
+        send_to_vessels("", entryID, 2,10)
+      elif parameters['delete']==str(0): 
+        modify_entry(parameters['entry'], entryID)
+        send_to_vessels(parameters['entry'], entryID, 3,3) 
       res = make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
 
-    #----Receive message from other vessels as leader----
-    elif msgheader.startswith('POST /leader'):
-      mycontext['stoplock'].acquire() 
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      #----Add and send message----    
-      if(msgheader.startswith('POST /leader/entries')):
-        mycontext['id']=mycontext['id']+1            
-        add_entry(parameters['entry'],mycontext['id'])
-        send_to_vessels(parameters['entry'],mycontext['id'],1,3)
-      #----Modify and send message----
-      elif(msgheader.startswith('POST /leader/modify')):
-        modify_entry(parameters['entry'], parameters['entryID'])
-        send_to_vessels(parameters['entry'],parameters['entryID'], 3,3) 
-      #----Delete and send message---- 
-      elif(msgheader.startswith('POST /leader/delete')):
-        delete_entry(parameters['entryID'])
-        send_to_vessels("",parameters['entryID'], 2,3)  
-      mycontext['stoplock'].release()
-
-     #----Receive add from leader and update board----  
+     #----Receive add from vessels and update board----  
     elif msgheader.startswith( 'POST /neighbour/entries' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
       entryID=parameters['entryID']
+			prio=parameters['prio']
+			if entryID <= mycontext['id']:
+				if prio > mycontext[]:
+					# call update_entry
+					
+			else: 
       add_entry(entry,int(entryID)) 
 
-    #----Receive delete from leader and update board-----
+    #----Receive delete from vessels and update board-----
     elif msgheader.startswith( 'POST /neighbour/delete' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       delete_entry(parameters['entryID'])
 
-    #----Receive modify from leader and update board-----
+    #----Receive modify from vessels and update board-----
     elif msgheader.startswith( 'POST /neighbour/modify' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry = parameters['entry']
       entryID = parameters['entryID']
       modify_entry(entry, entryID)
-      
-    #----LEADER ELECTION----
-    #
-    #----Receive election message and start coordination if we're the initalizing node  
-    #----otherwise forward the election message 
-    elif msgheader.startswith( 'POST /election'):
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      startID = parameters['startID']
-      leaderID = parameters['leaderID']
-      randomNumber = parameters['randomNumber']
-      if startID == str(mycontext['identifier']):
-        mycontext['leader'] = leaderID
-        start_coordination(mycontext['identifier'])
-      else: 
-        forward_election(mycontext['identifier'],startID,leaderID,randomNumber)   
-
-    #----Receive coordination message and set leader 
-    #----Forward the message if we're not the starting node 
-    elif msgheader.startswith( 'POST /coordination'):    
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      startID = parameters['startID']
-      leaderID = parameters['leaderID']
-      mycontext['leader']= leaderID
-      if startID != str(mycontext['identifier']): 
-      	forward_coordination(mycontext['identifier'],startID,leaderID) 
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
 
@@ -189,6 +133,23 @@ def modify_entry(entry,entryID):
   update_entries()
 
 # ------------------------------------------------------------------------------
+# Get entries 
+# --------------------------------------------------------------------------
+def get_entry(entryID):
+	return mycontext['idhash'][int(entryID)]
+
+# ------------------------------------------------------------------------------
+# Update entries recursively   
+# --------------------------------------------------------------------------
+def update_entry(entry,entryID):
+	if(entryID <= mycontext['id']):
+		moveEntry = get_entry(entryID)
+		modify_entry(entry,entryID)
+		update_entry(moveEntry,entryID+1)
+	else: 
+		add_entry(entry,entryID+1)
+		
+# ------------------------------------------------------------------------------
 # Send message to other vessels. Try as many times as specified by testnmbr 
 # action = 1 : Insert  
 # action = 2 : Delete
@@ -203,7 +164,7 @@ def send_to_vessel(entry,entryID,action,testnmbr,sock):
   try:
     if action == 1: 
       socketobject = openconn(sock[0],int(sock[1]))
-      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID))
+      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)"&prio="+mycontext['identifier'])
       send_object = 'POST /neighbour/entries ' + http_res
     elif action == 2:   
       socketobject = openconn(sock[0],int(sock[1]))    
@@ -223,137 +184,6 @@ def send_to_vessel(entry,entryID,action,testnmbr,sock):
         print "error in connection to vessel: " + sock[0]
       else:
         print "error in connection to vessel: " + sock[1]
-# ------------------------------------------------------------------------------
-# Initialize leader election dynamically in the ring(if the next-neighbour is down try its next and so on)
-# POST /election 
-#	startID: text 
-# leaderID: text 
-# randomNumber: number 
-# ------------------------------------------------------------------------------
-def init_election(vessel):
-	#----Get the next vessel in the ring-topology 
-  sendVessel = get_next_vessel(vessel)
-  try:  
-  	#----If testing locally mycontext['global'] is set to false  
-    if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))
-    http_res = make_http_response(200, 'OK',"startID="+mycontext['identifier']+"&leaderID="+mycontext['identifier']+"&randomNumber="+str(mycontext['random']))
-    send_object = 'POST /election' + http_res 
-    socketobject.send(send_object)
-    socketobject.close()
-  except:
-    print "Tried: " + str(sendVessel) + " now trying next in list"
-    init_election(sendVessel)
-
-# ------------------------------------------------------------------------------
-# Forward election message dynamically on the ring
-# Change leader to us if our random number is greater  
-# POST /election 
-#	startID: text 
-# leaderID: text 
-# randomNumber: number 
-# ------------------------------------------------------------------------------
-def forward_election(vessel,startID,leaderID,randomNumber):
-		#----Get the next vessel in the ring-topology
-  sendVessel = get_next_vessel(vessel)
-  try:
-  	#----If testing locally mycontext['global'] is set to false
-    if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))    
-    if mycontext['random'] > int(randomNumber):
-      randomNumber = str(mycontext['random'])
-      http_res = make_http_response(200, 'OK',"startID="+startID+"&leaderID="+mycontext['identifier']+"&randomNumber="+randomNumber)
-    else:
-      http_res = make_http_response(200, 'OK',"startID="+startID+"&leaderID="+str(leaderID)+"&randomNumber="+randomNumber)
-    send_object = 'POST /election' + http_res 
-    socketobject.send(send_object)  
-    socketobject.close()
-  except Exception, e:
-    print "Exception foward_message: %s, %s\n" %(type(e), e)
-    forward_election(sendVessel,startID,leaderID,randomNumber)
-
-# ------------------------------------------------------------------------------
-# Start to send coordination message dynamically on the ring 
-#	POST /coordination 
-#	startID=text
-# leaderID=text
-# ------------------------------------------------------------------------------
-def start_coordination(vessel):
-  sendVessel = get_next_vessel(vessel)
-  try:
-    if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))
-    http_res = make_http_response(200, 'OK',"startID="+mycontext['identifier']+"&leaderID="+mycontext['leader'])
-    send_object = 'POST /coordination' + http_res 
-    socketobject.send(send_object) 
-    socketobject.close()
-  except Exception, e:
-    print "Exception foward_message: %s, %s\n" %(type(e), e)
-    start_coordination(sendVessel)
-
-# ------------------------------------------------------------------------------
-# Forward coordination message dynamically on the ring 
-#	POST /coordination 
-#	startID=text
-# leaderID=text
-# ------------------------------------------------------------------------------
-def forward_coordination(vessel,startID,leaderID):
-  sendVessel = get_next_vessel(vessel)
-  try:
-    if mycontext['global']:
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))
-    http_res = make_http_response(200, 'OK',"startID="+startID+"&leaderID="+leaderID)
-    send_object = 'POST /coordination' + http_res 
-    socketobject.send(send_object) 
-    socketobject.close()
-  except Exception, e:
-    print "Exception foward_message: %s, %s\n" %(type(e), e)	
-    forward_coordination(sendVessel,startID,leaderID)
-
-# ------------------------------------------------------------------------------
-# Get next IP/port in the ring
-# ------------------------------------------------------------------------------
-def get_next_vessel(vessel):
-  return mycontext['ring'][(mycontext['ring'].index(vessel)+1)%len(mycontext['ring'])]
-
-# ------------------------------------------------------------------------------
-# Send message to the leader 
-# action = 1 : Insert  
-# action = 2 : Delete 
-# action = 3 : Modify
-# Elect new leader if the leader fails to respond after tesnmbr tries  
-# ----------------------------------------------------------------------------  
-def send_to_leader(entry,entryID,action,testnmbr):
-  try:
-    if mycontext['global']:
-      socketobject = openconn(mycontext['leader'],mycontext['port']) 
-    else:
-      socketobject = openconn(mycontext['ip'],int(mycontext['leader']))
-    if(action == 1):
-      http_res = make_http_response(200,'OK', "entry="+entry)
-      send_object = 'POST /leader/entries ' + http_res
-    elif(action == 2):
-      http_res = make_http_response(200,'OK', "entryID="+entryID)
-      send_object = 'POST /leader/delete ' + http_res
-    elif(action ==3):
-      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+entryID)
-      send_object = 'POST /leader/modify ' + http_res
-    socketobject.send(send_object)
-    socketobject.close()
-  except Exception, e:
-    print "Exception send_to_leader: %s, %s\n" %(type(e), e)	
-    if(testnmbr != 0):
-    	send_to_leader(entry,entryID,action,testnmbr-1)
-    else: 
-    	init_election(mycontext['identifier'])
 
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
