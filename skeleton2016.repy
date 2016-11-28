@@ -34,7 +34,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)
       mycontext['id'] = mycontext['id'] + 1 
       add_entry(parameters['entry'],mycontext['id'])
-      send_to_vessels(parameters['entry'],mycontext['id'],1,3)
+      send_to_vessels(parameters['entry'],mycontext['id'],"ADD",3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
@@ -47,10 +47,10 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       #----Delete or modify entry on the board if leader, otherwise send message to leader
       if parameters['delete']==str(1):
         delete_entry(entryID)
-        send_to_vessels("", entryID, 2,10)
+        send_to_vessels("", entryID, "DELETE",3)
       elif parameters['delete']==str(0): 
         modify_entry(parameters['entry'], entryID)
-        send_to_vessels(parameters['entry'], entryID, 3,3) 
+        send_to_vessels(parameters['entry'], entryID, "MODIFY",3)
       res = make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
@@ -61,17 +61,17 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
       entryID=int(parameters['entryID'])
-      prio=parameters['prio']
-      if entryID <= mycontext['id']:
-        if entryID != mycontext['id']: 
-          #the sender is behind, send history!
-         	#send_history() 	
-         	update_entry(entry,entryID)
-        if prio > mycontext['identifier']:
-          update_entry(entry,entryID)	
-          #the sender is behind and my prio is bigger 
-      else: 
+      lclock = int(parameters['clock'])
+      vid=parameters['vid'] #also used as prio check
+      #clocks are synced
+      if lclock == (mycontext['lclock'] + 1):
         add_entry(entry,int(entryID))
+      elif lclock < (mycontext['lclock'] +1):
+        print "sender out of sync"
+        #send_history()
+      elif lclock > (mycontext['lclock'] +1):
+        print "im out of sync"
+        #request_history()
 
     #----Receive delete from vessels and update board-----
     elif msgheader.startswith( 'POST /neighbour/delete' ):
@@ -86,6 +86,14 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       entry = parameters['entry']
       entryID = parameters['entryID']
       modify_entry(entry, entryID)
+
+    #----DEBUG--------------------------------------------
+    elif msgheader.startswith( 'DEBUG' ):
+      print "-----------DEBUG------------"
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      rollback(int(parameters['debug']),1)
+
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
 
@@ -116,10 +124,13 @@ def update_board(entryID):
 
 # ------------------------------------------------------------------------------
 # Add entries to hash then call update 
+# if we want to update id, don't do it here 
 # ---------------------------------------------------------------------------
 def add_entry(entry,entryID):
-  mycontext['id'] = int(entryID) 
-  mycontext['idhash'][mycontext['id']]= entry 
+  mycontext['lclock'] = mycontext['lclock'] + 1
+  #mycontext['id'] = int(entryID) 
+  mycontext['idhash'][int(entryID)]= entry 
+  mycontext['history'].append(("ADD", (entry), entryID))
   update_board(entryID)
 
 # ------------------------------------------------------------------------------
@@ -127,13 +138,18 @@ def add_entry(entry,entryID):
 # ---------------------------------------------------------------------------
 def delete_entry(entryID):
   if mycontext['idhash'].has_key(int(entryID)):
+    entry = get_entry(entryID)
+    mycontext['lclock'] = 	mycontext['lclock'] + 1
     del mycontext['idhash'][int(entryID)]
+    mycontext['history'].append(("DELETE", (entry), entryID))
     update_board(1)
 
 # ------------------------------------------------------------------------------
 # Modify entries in the hash then call update  
 # --------------------------------------------------------------------------
 def modify_entry(entry,entryID):
+  mycontext['history'].append(("MODIFY", (entry,get_entry(entryID)), entryID))
+  mycontext['lclock'] = 	mycontext['lclock'] + 1
   mycontext['idhash'][int(entryID)] = entry
   update_board(1)
 
@@ -151,15 +167,29 @@ def update_entry(entry,entryID):
 		moveEntry = get_entry(entryID)
 		modify_entry(entry,entryID)
 		update_entry(moveEntry,entryID+1) 
-	else: 
+	else:
 		mycontext['id'] = mycontext['id']+1
 		add_entry(entry,mycontext['id'])
-		
+
 # ------------------------------------------------------------------------------
-# Send message to other vessels. Try as many times as specified by testnmbr 
-# action = 1 : Insert  
-# action = 2 : Delete
-# action = 3 : Modify
+# Send message to other vessels. Try as many times as specified by testnmbr
+# ------------------------------------------------------------------------------
+def rollback(lag,num):
+  print "----------ROLLBACK------------"
+  print "history: "
+  print mycontext['history']
+  if lag != 0:
+    print "lag: " + str(lag)
+    lastupdate = mycontext['history'][-num]
+    print "lastupdate: "
+    print lastupdate
+    if lastupdate[0] == "ADD":
+      delete_entry(lastupdate[2])
+    rollback(lag-1,num+1)
+  else:
+    update_board(1)
+# ------------------------------------------------------------------------------
+# Send message to other vessels. Try as many times as specified by testnmbr
 # ----------------------------------------------------------------------------  
 
 def send_to_vessels(entry,entryID,action,testnmbr):
@@ -168,17 +198,17 @@ def send_to_vessels(entry,entryID,action,testnmbr):
 
 def send_to_vessel(entry,entryID,action,testnmbr,sock):
   try:
-    if action == 1: 
+    if action == "ADD": 
       socketobject = openconn(sock[0],int(sock[1]))
-      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)+"&prio="+mycontext['identifier'])
+      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)+"&vid="+mycontext['identifier']+"&clock="+str(mycontext['lclock']))
       send_object = 'POST /neighbour/entries ' + http_res
-    elif action == 2:   
-      socketobject = openconn(sock[0],int(sock[1]))    
-      http_res = make_http_response(200,'OK',"entryID="+str(entryID))
-      send_object = 'POST /neighbour/delete ' + http_res
-    elif action == 3:
+    elif action == "DELETE":   
       socketobject = openconn(sock[0],int(sock[1]))
-      http_res = make_http_response(200, 'OK',"entry="+entry+"&entryID="+str(entryID))
+      http_res = make_http_response(200,'OK',"entryID="+str(entryID)+"&clock="+	str(mycontext['lclock']))
+      send_object = 'POST /neighbour/delete ' + http_res
+    elif action == "MODIFY":
+      socketobject = openconn(sock[0],int(sock[1]))
+      http_res = make_http_response(200, 'OK',"entry="+entry+"&entryID="+str(entryID)+"&clock="+str(mycontext['lclock']))
       send_object = 'POST /neighbour/modify' + http_res 
     socketobject.send(send_object)
     socketobject.close()
@@ -191,6 +221,22 @@ def send_to_vessel(entry,entryID,action,testnmbr,sock):
       else:
         print "error in connection to vessel: " + sock[1]
 
+# ------------------------------------------------------------------------------
+# Sends history to vessels out of sync
+# ------------------------------------------------------------------------------
+# if someone behind add to history and sen history
+def send_history(vessel, lag):
+  if lag > 20:
+    #send_board()
+    return
+  else:
+    if mycontext['global']:
+      socketobject = openconn(vessel,int(mycontext['port']))
+    else:
+      socketobject = openconn(mycontext['ip'],vessel)
+    send_list = mycontext['history'][-lag:]
+    for action in send_list:
+      send_to_vessel(action[0], action[1], action[2], 3, ())
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------
@@ -292,11 +338,14 @@ if callfunc == 'initialize':
   mycontext['vessels'] = []
 
   # Ring-topology for electing leader 
-  mycontext['ring'] = []
+  vector_clock = {}
+  mycontext['vector_clock'] = vector_clock
 
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
 
+	# Logical clock
+  mycontext['lclock'] = 0
 
   # Used to simplify global/local testing 
   mycontext['global'] = False
@@ -304,27 +353,30 @@ if callfunc == 'initialize':
   #Initialize Port and IP
   mycontext['port'] = port
   mycontext['ip'] = ip
-  
+
   #Either unique port or ip-address
   mycontext['identifier']=''
-	
+
+  #List for local history
+  mycontext['history'] = []
+
 
 	#Read ports(locally) or ip-addresses(globally)
-	#from a file  
+	#from a file
   if mycontext['global']:
     vessels = file("neighborlist.txt").read().split()
     mycontext['identifier'] = str(ip) 
-    for line in vessels: 
-      mycontext['ring'].append(line)
+    for line in vessels:
       if(ip != line):
         mycontext['vessels'].append((line,mycontext['port']))
+        mycontext['vector_clock'][line] = 0
   else:
     vessels = file("localports.txt").read().split()
     mycontext['identifier'] = str(port)
     for line in vessels:
-      mycontext['ring'].append(line)
       if(str(port) != line):
         mycontext['vessels'].append((mycontext['ip'],line))
+        mycontext['vector_clock'][line] = 0
 
   #read html template files
   mycontext['entry_template'] = file("entry_template.html").read()
