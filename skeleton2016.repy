@@ -34,7 +34,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)
       mycontext['id'] = mycontext['id'] + 1 
       add_entry(parameters['entry'],mycontext['id'])
-			send_to_vessels(parameters['entry'],mycontext['id'],1,3)
+      send_to_vessels(parameters['entry'],mycontext['id'],1,3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
@@ -60,14 +60,18 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
-      entryID=parameters['entryID']
-			prio=parameters['prio']
-			if entryID <= mycontext['id']:
-				if prio > mycontext[]:
-					# call update_entry
-					
-			else: 
-      add_entry(entry,int(entryID)) 
+      entryID=int(parameters['entryID'])
+      prio=parameters['prio']
+      if entryID <= mycontext['id']:
+        if entryID != mycontext['id']: 
+          #the sender is behind, send history!
+         	#send_history() 	
+         	update_entry(entry,entryID)
+        if prio > mycontext['identifier']:
+          update_entry(entry,entryID)	
+          #the sender is behind and my prio is bigger 
+      else: 
+        add_entry(entry,int(entryID))
 
     #----Receive delete from vessels and update board-----
     elif msgheader.startswith( 'POST /neighbour/delete' ):
@@ -98,39 +102,40 @@ def get_board_handler(msgheader, sockobj, thiscommhandle):
   stopcomm(thiscommhandle) 
 
 # ------------------------------------------------------------------------------
-# Update entries on the board using mycontext['ids'] as helper to loop 
-# through the hash 
-# ---------------------------------------------------------------------------
-def update_entries():
-  mycontext['entries']=""
-  for entryID in mycontext['ids']:
-    entryFormat  = mycontext['entry_template'] %('entries/%d' % (entryID), entryID, mycontext['idhash'][entryID])
-    mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+# Update entries on the board from entries with seqnumber entryID and upwards 
+# --------------------------------------------------------------------------
+
+def update_board(entryID):
+  if entryID == 1:
+    mycontext['entries']=""
+  if(entryID <= mycontext['id']):
+    if(mycontext['idhash'].has_key(entryID)):
+      entryFormat  = mycontext['entry_template'] %('entries/%d' % (entryID), entryID, mycontext['idhash'][entryID]) 
+      mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+    update_board(entryID+1)
 
 # ------------------------------------------------------------------------------
 # Add entries to hash then call update 
 # ---------------------------------------------------------------------------
 def add_entry(entry,entryID):
-  mycontext['id'] = int(entryID)
-  mycontext['ids'].append(mycontext['id']) 
+  mycontext['id'] = int(entryID) 
   mycontext['idhash'][mycontext['id']]= entry 
-  update_entries()
+  update_board(entryID)
 
 # ------------------------------------------------------------------------------
 # Delete entries from hash then call update 
 # ---------------------------------------------------------------------------
 def delete_entry(entryID):
-  if int(entryID) in mycontext['ids']:
+  if mycontext['idhash'].has_key(int(entryID)):
     del mycontext['idhash'][int(entryID)]
-    mycontext['ids'].remove(int(entryID))
-    update_entries()
+    update_board(1)
 
 # ------------------------------------------------------------------------------
 # Modify entries in the hash then call update  
 # --------------------------------------------------------------------------
 def modify_entry(entry,entryID):
   mycontext['idhash'][int(entryID)] = entry
-  update_entries()
+  update_board(1)
 
 # ------------------------------------------------------------------------------
 # Get entries 
@@ -145,9 +150,10 @@ def update_entry(entry,entryID):
 	if(entryID <= mycontext['id']):
 		moveEntry = get_entry(entryID)
 		modify_entry(entry,entryID)
-		update_entry(moveEntry,entryID+1)
+		update_entry(moveEntry,entryID+1) 
 	else: 
-		add_entry(entry,entryID+1)
+		mycontext['id'] = mycontext['id']+1
+		add_entry(entry,mycontext['id'])
 		
 # ------------------------------------------------------------------------------
 # Send message to other vessels. Try as many times as specified by testnmbr 
@@ -164,7 +170,7 @@ def send_to_vessel(entry,entryID,action,testnmbr,sock):
   try:
     if action == 1: 
       socketobject = openconn(sock[0],int(sock[1]))
-      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)"&prio="+mycontext['identifier'])
+      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)+"&prio="+mycontext['identifier'])
       send_object = 'POST /neighbour/entries ' + http_res
     elif action == 2:   
       socketobject = openconn(sock[0],int(sock[1]))    
@@ -243,7 +249,7 @@ def extract_parameters_from_query(msg):
 def generate_html_page():
   
   # dynamic title showing Ip address, port and up time. 
-  title='Sample board @ %s:%d. Up time: %d Leader: %s My random: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()),mycontext['leader'], mycontext['random'] )
+  title='Sample board @ %s:%d. Up time: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()))
   content = mycontext['boardcontents_template'] %( title, mycontext['entries'] )
   fullpage_h = mycontext['frontpage_header_template'] + content
   fullpage = fullpage_h + mycontext['frontpage_footer_template'] % mycontext['authors']
@@ -279,8 +285,6 @@ if callfunc == 'initialize':
   mycontext['id'] = 0
   
   #Vessels on the same network
-  #'ids' is used for looping the hash   
-  mycontext['ids'] = []
   idhash = {}
   mycontext['idhash'] = idhash 
 
