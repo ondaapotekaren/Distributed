@@ -1,2 +1,2 @@
 #!/bin/bash
-curl -d 'debug=3' -X 'DEBUG' 'http://129.16.25.61:63119/'
+curl -d 'debug=3' -X 'DEBUG' 'http://10.0.132.48:63119/'

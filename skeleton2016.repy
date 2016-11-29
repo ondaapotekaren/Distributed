@@ -34,6 +34,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)
       mycontext['id'] = mycontext['id'] + 1 
       add_entry(parameters['entry'],mycontext['id'])
+      mycontext['history'].append(("ADD", (parameters['entry']), mycontext['id']))
       send_to_vessels(parameters['entry'],mycontext['id'],"ADD",3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
@@ -46,6 +47,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       entryID = msgheader.split('/')[2].split(' ')[0]
       #----Delete or modify entry on the board if leader, otherwise send message to leader
       if parameters['delete']==str(1):
+      	mycontext['history'].append(("DELETE", (get_entry(entryID)), int(entryID) ))
         delete_entry(entryID)
         send_to_vessels("", entryID, "DELETE",3)
       elif parameters['delete']==str(0): 
@@ -125,27 +127,30 @@ def update_board(entryID):
 # ------------------------------------------------------------------------------
 # Add entries to hash then call update 
 # if we want to update id, don't do it here 
+# also probably don't update clock here 
 # ---------------------------------------------------------------------------
 def add_entry(entry,entryID):
   mycontext['lclock'] = mycontext['lclock'] + 1
   #mycontext['id'] = int(entryID) 
   mycontext['idhash'][int(entryID)]= entry 
-  mycontext['history'].append(("ADD", (entry), entryID))
+  #mycontext['history'].append(("ADD", (entry), entryID))
   update_board(entryID)
 
 # ------------------------------------------------------------------------------
-# Delete entries from hash then call update 
+# Delete entries from hash then call update
+# also probably don't update clock here 
 # ---------------------------------------------------------------------------
 def delete_entry(entryID):
   if mycontext['idhash'].has_key(int(entryID)):
     entry = get_entry(entryID)
     mycontext['lclock'] = 	mycontext['lclock'] + 1
     del mycontext['idhash'][int(entryID)]
-    mycontext['history'].append(("DELETE", (entry), entryID))
+    #mycontext['history'].append(("DELETE", (entry), entryID))
     update_board(1)
 
 # ------------------------------------------------------------------------------
-# Modify entries in the hash then call update  
+# Modify entries in the hash then call update
+# also probably don't update clock here  
 # --------------------------------------------------------------------------
 def modify_entry(entry,entryID):
   mycontext['history'].append(("MODIFY", (entry,get_entry(entryID)), entryID))
@@ -156,7 +161,7 @@ def modify_entry(entry,entryID):
 # ------------------------------------------------------------------------------
 # Get entries 
 # --------------------------------------------------------------------------
-def get_entry(entryID):
+def get_entry(entryID): 
 	return mycontext['idhash'][int(entryID)]
 
 # ------------------------------------------------------------------------------
@@ -172,20 +177,19 @@ def update_entry(entry,entryID):
 		add_entry(entry,mycontext['id'])
 
 # ------------------------------------------------------------------------------
-# Send message to other vessels. Try as many times as specified by testnmbr
+# Rollback history as many times as specified by the argument lag 
 # ------------------------------------------------------------------------------
 def rollback(lag,num):
   print "----------ROLLBACK------------"
   print "history: "
   print mycontext['history']
+  lastupdate = mycontext['history'][-num]
   if lag != 0:
-    print "lag: " + str(lag)
-    lastupdate = mycontext['history'][-num]
-    print "lastupdate: "
-    print lastupdate
     if lastupdate[0] == "ADD":
       delete_entry(lastupdate[2])
-    rollback(lag-1,num+1)
+    elif lastupdate[0] == "DELETE": 
+      add_entry(lastupdate[1],lastupdate[2])
+    rollback(lag-1,num+1)    
   else:
     update_board(1)
 # ------------------------------------------------------------------------------
