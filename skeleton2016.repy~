@@ -13,6 +13,7 @@
 # Start listening and handle incoming connections in board() function
 # Also star leader election after 5 second 
 # ------------------------------------------------------------------------------   
+
 def start_board():
   ip = mycontext['ip']
   port = mycontext['port']
@@ -77,22 +78,39 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       sendclock = int(parameters['sendclock']) 
       recclock = int(parameters['recclock'])
       vid=parameters['vid'] #also used as prio check
-
+      print parameters['vectorclock'] 
+      tempdic = format_vector(parameters['vectorclock'])
+      syncval = check_clock(tempdic,mycontext['vector_clock']) 
+      print syncval
+      if syncval[1] > 0:
+        print syncval[1]
+        #rollback syncval[1] entries
+      if syncval[0] > 1:
+        print syncval[0]
+        #request history of size syncval[0]
+        #vid, syncval[0], 
       if not is_double(vid, sendclock):
-
-	#clocks are synced
-	if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
-	  mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
-	  mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1 
-	  mycontext['id'] = mycontext['id'] + 1
-	  add_entry(entry, mycontext['id'])
-	  mycontext['history'].append(("ADD", (entry), entryID, vid, mycontext['vector_clock'][sendclock]))
-	elif sendclock < (mycontext['lclock'] +1):
-	  print "sender out of sync"
-	  #send_history()
-	elif sendclock > (mycontext['lclock'] +1):
-	  print "im out of sync"
-	  #request_history()
+        print "is not double"
+      if syncval[0]==1 and syncval[1]==0:
+        #everything is fine
+        mycontext['history'].append(("ADD", (entry), entryID, vid, mycontext['vector_clock'][vid]))
+        mycontext['id'] = mycontext['id'] + 1
+        add_entry(entry, mycontext['id'])
+        mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1 
+      #clocks are synced
+      #check so that clocks are correct 
+        #if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
+          #mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
+          #mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1 
+          #mycontext['id'] = mycontext['id'] + 1
+          #add_entry(entry, mycontext['id'])
+          #mycontext['history'].append(("ADD", (entry), entryID, vid, mycontext['vector_clock'][sendclock])) 
+        #elif sendclock < (mycontext['lclock'] +1):
+          #print "sender out of sync"
+          #send_history()
+        #elif sendclock > (mycontext['lclock'] +1):
+          #print "im out of sync"
+        #request_history()
 
     #----Receive delete from vessels and update board-----
     elif msgheader.startswith( 'POST /neighbour/delete' ):
@@ -102,7 +120,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       sendclock = int(parameters['sendclock']) 
       recclock = int(parameters['recclock'])
       vid=parameters['vid'] #also used as prio check
-
+    
       if not is_double(vid, sendclock):
 	if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
 	  mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
@@ -229,9 +247,42 @@ def update_entry(entry,entryID):
 	else:
 		mycontext['id'] = mycontext['id']+1
 		add_entry(entry,mycontext['id'])
+# ------------------------------------------------------------------------------
+# merge shit 
+# ------------------------------------------------------------------------------
+def merge_history(remote_history,rollback_history):
+  return
+
+# ------------------------------------------------------------------------------
+# compare vectorclocks to see rollback and history size 
+# -----------------------------------------------------------------------------
+def check_clock(in_clock,our_clock):
+  historySize = 0
+  rollbackSize = 0 
+  for key in our_clock: 
+    size = in_clock[key]-our_clock[key]
+    if(size>0):
+      historySize = historySize + size  
+    elif(size<0):
+      rollbackSize = rollbackSize + size*(-1)
+  return (historySize,rollbackSize)
+
+# ------------------------------------------------------------------------------
+# Format 
+# ---------------------------------------------------------------------------- 
+def format_vector(string):
+  vectordict = {}
+  formatstring = (" " + string[1:-1]).split(',')
+  for pair in formatstring:
+     key = pair.split(':')[0][2:-1]
+     value = pair.split(':')[1][1:]
+     vectordict[key] = int(value)
+  return vectordict    
 
 # ------------------------------------------------------------------------------
 # Rollback history as many times as specified by the argument lag 
+# return pop history
+# use history in merge_history 
 # ------------------------------------------------------------------------------
 def rollback(lag,num):
   print "----------ROLLBACK------------"
@@ -248,6 +299,13 @@ def rollback(lag,num):
     rollback(lag-1,num+1)     
   else:
     update_board(1)
+
+# ------------------------------------------------------------------------------
+# Send message to other vessels. Try as many times as specified by testnmbr
+# ----------------------------------------------------------------------------  
+
+
+
 # ------------------------------------------------------------------------------
 # Send message to other vessels. Try as many times as specified by testnmbr
 # ----------------------------------------------------------------------------  
@@ -265,7 +323,7 @@ def send_to_vessel(entry,entryID,action,testnmbr,sock):
 
     http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)+"&vid="
                                    +mycontext['identifier']+"&sendclock="+str(mycontext['vector_clock'][mycontext['identifier']])
-                                   +"&recclock="+str(mycontext['vector_clock'][sendID]))
+                                   +"&recclock="+str(mycontext['vector_clock'][sendID])+"&vectorclock="+str(mycontext['vector_clock']))
     
     if action == "ADD": 
       socketobject = openconn(sock[0],int(sock[1]))
