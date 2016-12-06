@@ -56,12 +56,12 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     elif msgheader.startswith( 'POST /entries' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-      entryID = msgheader.split('/')[2].split(' ')[0]
+      entryID = int(msgheader.split('/')[2].split(' ')[0])
 
       if parameters['delete']==str(1):
       	delete_action = ("DELETE"
       		               ,get_entry(entryID)
-      		               ,int(entryID)
+      		               ,entryID
       		               ,mycontext['identifier']
       		               ,mycontext['vector_clock'][mycontext['identifier']]+1) 
       	do_action(delete_action)
@@ -70,7 +70,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       elif parameters['delete']==str(0): 
         modify_action = ("MODIFY"
         	               ,(parameters['entry'],get_entry(entryID))
-        	               ,int(entryID)
+        	               ,entryID
         	               ,mycontext['identifier']
         	               ,mycontext['vector_clock'][mycontext['identifier']]+1)
         do_action(modify_action)
@@ -81,7 +81,8 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       stopcomm(thiscommhandle)
 
      #----Receive add from vessels and update board----  MAYBE ADD LOCK? 
-    elif msgheader.startswith( 'POST /neighbour/entries' ):
+     #----send action as parameter 
+    elif msgheader.startswith( 'POST /neighbour' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
@@ -97,76 +98,42 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       	return 
       if rollbackSize > 0:
         rollback_history = rollback(rollbackSize)
-      if requestSize == 1:
-        #just one entry 
-        add_action=("ADD"
-        	          ,entry
-        	          ,entryID
-        	          ,vid 
-        	          ,remote_clock[vid])
-        mycontext['remote_history'].append(add_action)
+      if parameters['action'] == "ADD": 
+        action=("ADD"
+        	      ,entry
+        	      ,entryID
+        	      ,vid 
+        	      ,remote_clock[vid])
+      elif parameters['action'] == "DELETE":  
+        action=("DELETE"
+      		      ,get_entry(entryID)
+      		      ,entryID
+      		      ,vid
+      		      ,remote_clock[vid])
+      elif parameters['action'] == "MODIFY":
+        action=("MODIFY"
+        	      ,(parameters['entry'],get_entry(entryID))
+        	      ,entryID
+        	      ,vid
+        	      ,remote_clock[vid])
+      remote_history.append(action)
         
-      elif requestSize > 1:
-      	# top of stack is oldest 
-        remote_history += add_entry + request_history(requestSize,vid)
+      if requestSize > 1:
+      	# the oldest action is on the top of the stack 
+        remote_history += request_history(requestSize,vid)
 
       action_queue = merge_history(remote_history,rollback_history) 
       
+      # now Fukuyama is right ;), add everything
       for action in action_queue:
         do_action(action)
-
-
-    #----Receive delete from vessels and update board-----
-    elif msgheader.startswith( 'POST /neighbour/delete' ):
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      entryID = int(parameters['entryID'])
-      sendclock = int(parameters['sendclock']) 
-      recclock = int(parameters['recclock'])
-      vid=parameters['vid'] #also used as prio check
-    
-      if not is_doublet(vid, sendclock):
-	if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
-	  mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
-	  mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1
-	  mycontext['history'].append(("DELETE", (get_entry(entryID)), entryID, vid, mycontext['vector_clock'][sendclock]))
-	  delete_entry(parameters['entryID'])
-	elif sendclock < (mycontext['lclock'] +1):
-	  print "sender out of sync"
-	  #send_history()
-	elif sendclock > (mycontext['lclock'] +1):
-	  print "im out of sync"
-	  #request_history()
-
-    #----Receive modify from vessels and update board-----
-    elif msgheader.startswith( 'POST /neighbour/modify' ):
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      entry=parameters['entry']
-      entryID=int(parameters['entryID'])
-      sendclock = int(parameters['sendclock']) 
-      recclock = int(parameters['recclock'])
-      vid=parameters['vid'] #also used as prio check
-
-      if not is_doublet(vid, sendclock):
-	if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
-	  mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
-	  mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1
-	  mycontext['history'].append(("MODIFY", (entry,get_entry(entryID)), entryID, vid, mycontext['vector_clock'][sendclock]))
-	  modify_entry(entry, entryID)
-	elif sendclock < (mycontext['lclock'] +1):
-	  print "sender out of sync"
-	  #send_history()
-	elif sendclock > (mycontext['lclock'] +1):
-	  print "im out of sync"
-	  #request_history()
 
     #----DEBUG--------------------------------------------
     elif msgheader.startswith( 'DEBUG' ):
       print "-----------DEBUG------------"
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-      rollback(int(parameters['debug']),1)
+      rollback(int(parameters['debug']))
 
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
@@ -273,18 +240,6 @@ def merge_history(remote_history,rollback_history):
   return action_queue 
 
 # ------------------------------------------------------------------------------
-# merge history  
-# ------------------------------------------------------------------------------
-#def merge_history(remote_history,rollback_history):
-#  action_queue = []
-#  if remote_action[3] > rollback_action[3]:
-#    action_queue.append(remote_history.pop())
-#    action_queue.append(rollback_history.pop())
-#  else:
-#    action_queue.append(rollback_history.pop()) 
-#    action_queue.append(remote_history.pop())
-
-# ------------------------------------------------------------------------------
 # do action, argument: action tuple 
 # ------------------------------------------------------------------------------
 def do_action(action):
@@ -329,28 +284,6 @@ def format_vector(string):
 # Rollback history as many times as specified by the argument lag 
 # return pop history
 # use history in merge_history 
-# ------------------------------------------------------------------------------
-#def rollback(lag,num):
-#  print "----------ROLLBACK------------"
-#  print "history: "
-#  print mycontext['history']
-#  rollbackstack = []
-#  lastupdate = mycontext['history'][-num]
-#  if lag != 0:
-#    if lastupdate[0] == "ADD":
-#      delete_entry(lastupdate[2])
-#    elif lastupdate[0] == "DELETE": 
-#      add_entry(lastupdate[1],lastupdate[2])
-#    elif lastupdate[0]=="MODIFY":
-#      modify_entry(lastupdate[1][1],lastupdate[2])
-#    rollback(lag-1,num+1)     
-#  else:
-#    update_board(1)
-
-# ------------------------------------------------------------------------------
-# Rollback history as many times as specified by the argument lag 
-# return pop history
-# use history in merge_history 
 # the top entry in the rollback_stack is the oldest
 # rollback clock and id to make merging easier 
 # ------------------------------------------------------------------------------
@@ -367,7 +300,7 @@ def rollback(lag):
 	    add_entry(lastupdate[1],lastupdate[2])
 	  elif lastupdate[0] == "MODIFY":
 	    modify_entry(lastupdate[1][1],lastupdate[2])
-	  rollback_queue.append(lastupdate)
+	  rollback_stack.append(lastupdate)  
 	return rollback_stack
 
 # ------------------------------------------------------------------------------
@@ -387,27 +320,14 @@ def send_to_vessels(entry,entryID,action,testnmbr):
     send_to_vessel(entry,entryID,action,testnmbr,sock)
 
 def send_to_vessel(entry,entryID,action,testnmbr,sock):
-  try:
-    if mycontext['global']:
-      sendID = sock[0]
-    else: 
-      sendID = sock[1] 
-
-    http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="
-    	                            +str(entryID)+"&vid="+mycontext['identifier']
-    	                            +"&vectorclock="+str(mycontext['vector_clock']))
-    
-    if action == "ADD": 
-      socketobject = openconn(sock[0],int(sock[1]))
-      send_object = 'POST /neighbour/entries ' + http_res
-    elif action == "DELETE":   
-      socketobject = openconn(sock[0],int(sock[1]))
-      #http_res = make_http_response(200,'OK',"entryID="+str(entryID)+"&clock="+	str(mycontext['lclock']))
-      send_object = 'POST /neighbour/delete ' + http_res
-    elif action == "MODIFY":
-      socketobject = openconn(sock[0],int(sock[1]))
-      #http_res = make_http_response(200, 'OK',"entry="+entry+"&entryID="+str(entryID)+"&clock="+str(mycontext['lclock']))
-      send_object = 'POST /neighbour/modify' + http_res 
+  try: 
+    msg = ("entry="+entry+"&entryID="
+    	     +str(entryID)+"&vid="+mycontext['identifier']
+    	     +"&vectorclock="+str(mycontext['vector_clock'])
+    	     +"&action="+action)
+    socketobject = openconn(sock[0],int(sock[1]))
+    http_res = make_http_response(200,'OK',msg)
+    send_object = 'POST /neighbour' + http_res   
     socketobject.send(send_object)
     socketobject.close()
   except:
