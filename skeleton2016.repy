@@ -4,8 +4,8 @@
 
 # ------------------------------------------------------------------------------
 # History strucure
-# "ADD", (entry), entryID, author, seq_number 
-# "DELETE", (entry), entryID, author, seq_number
+# "ADD", entry, entryID, author, seq_number 
+# "DELETE", entry, entryID, author, seq_number
 # "MODIFY", (newEntry, oldEntry), entryID, author, seq_number
 # ------------------------------------------------------------------------------ 
 
@@ -40,77 +40,81 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     #----Add entry(sent from browser)----
     elif msgheader.startswith( 'POST /board' ):
       query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      mycontext['id'] = mycontext['id'] + 1 
-      add_entry(parameters['entry'],mycontext['id'])
-      mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
-      mycontext['history'].append(("ADD", (parameters['entry']), mycontext['id'],mycontext['identifier'],mycontext['vector_clock'][mycontext['identifier']]))
+      parameters = extract_parameters_from_query(query)  
+      add_action = ("ADD"
+      	            ,parameters['entry']
+      	            ,mycontext['id']+1
+      	            ,mycontext['identifier']
+      	            ,mycontext['vector_clock'][mycontext['identifier']]+1) 
+      do_action(add_action)
       send_to_vessels(parameters['entry'],mycontext['id'],"ADD",3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
-      
+
     #----Delete or Modify entry(sent from browser)---- 
     elif msgheader.startswith( 'POST /entries' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entryID = msgheader.split('/')[2].split(' ')[0]
-      mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
-      #----Delete or modify entry on the board if leader, otherwise send message to leader
+
       if parameters['delete']==str(1):
-      	mycontext['history'].append(("DELETE", (get_entry(entryID)), int(entryID),mycontext['identifier'],mycontext['vector_clock'][mycontext['identifier']] ))
-        delete_entry(entryID)
+      	delete_action = ("DELETE"
+      		               ,get_entry(entryID)
+      		               ,int(entryID)
+      		               ,mycontext['identifier']
+      		               ,mycontext['vector_clock'][mycontext['identifier']]+1) 
+      	do_action(delete_action)
         send_to_vessels("", entryID, "DELETE",3)
+  
       elif parameters['delete']==str(0): 
-        mycontext['history'].append(("MODIFY", (parameters['entry'],get_entry(entryID)), entryID,mycontext['identifier'], mycontext['vector_clock'][mycontext['identifier']]))
-        modify_entry(parameters['entry'], entryID)
+        modify_action = ("MODIFY"
+        	               ,(parameters['entry'],get_entry(entryID))
+        	               ,int(entryID)
+        	               ,mycontext['identifier']
+        	               ,mycontext['vector_clock'][mycontext['identifier']]+1)
+        do_action(modify_action)
         send_to_vessels(parameters['entry'], entryID, "MODIFY",3)
+
       res = make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
 
-     #----Receive add from vessels and update board----  
+     #----Receive add from vessels and update board----  MAYBE ADD LOCK? 
     elif msgheader.startswith( 'POST /neighbour/entries' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
       entryID=int(parameters['entryID'])
-      sendclock = int(parameters['sendclock']) 
-      recclock = int(parameters['recclock'])
-      vid=parameters['vid'] #also used as prio check
-      print parameters['vectorclock'] 
-      tempdic = format_vector(parameters['vectorclock'])
-      syncval = check_clock(tempdic,mycontext['vector_clock']) 
-      print syncval
-      if syncval[1] > 0:
-        print syncval[1]
-        #rollback syncval[1] entries
-      if syncval[0] > 1:
-        print syncval[0]
-        #request history of size syncval[0]
-        #vid, syncval[0], 
-      if not is_double(vid, sendclock):
-        print "is not double"
-      if syncval[0]==1 and syncval[1]==0:
-        #everything is fine
-        mycontext['history'].append(("ADD", (entry), entryID, vid, mycontext['vector_clock'][vid]))
-        mycontext['id'] = mycontext['id'] + 1
-        add_entry(entry, mycontext['id'])
-        mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1 
-      #clocks are synced
-      #check so that clocks are correct 
-        #if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
-          #mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
-          #mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1 
-          #mycontext['id'] = mycontext['id'] + 1
-          #add_entry(entry, mycontext['id'])
-          #mycontext['history'].append(("ADD", (entry), entryID, vid, mycontext['vector_clock'][sendclock])) 
-        #elif sendclock < (mycontext['lclock'] +1):
-          #print "sender out of sync"
-          #send_history()
-        #elif sendclock > (mycontext['lclock'] +1):
-          #print "im out of sync"
-        #request_history()
+      vid=parameters['vid']
+      remote_clock = format_vector(parameters['vectorclock'])
+      syncval = check_clock(remote_clock,mycontext['vector_clock']) 
+      requestSize = syncval[0]
+      rollbackSize = syncval[1]
+      remote_history = []
+      rollback_history = []
+      if is_doublet(vid, remote_clock[vid]):
+      	return 
+      if rollbackSize > 0:
+        rollback_history = rollback(rollbackSize)
+      if requestSize == 1:
+        #just one entry 
+        add_action=("ADD"
+        	          ,entry
+        	          ,entryID
+        	          ,vid 
+        	          ,remote_clock[vid])
+        mycontext['remote_history'].append(add_action)
+        
+      elif requestSize > 1:
+      	# top of stack is oldest 
+        remote_history += add_entry + request_history(requestSize,vid)
+
+      action_queue = merge_history(remote_history,rollback_history) 
+      
+      for action in action_queue:
+        do_action(action)
+
 
     #----Receive delete from vessels and update board-----
     elif msgheader.startswith( 'POST /neighbour/delete' ):
@@ -121,7 +125,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       recclock = int(parameters['recclock'])
       vid=parameters['vid'] #also used as prio check
     
-      if not is_double(vid, sendclock):
+      if not is_doublet(vid, sendclock):
 	if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
 	  mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
 	  mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1
@@ -144,7 +148,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       recclock = int(parameters['recclock'])
       vid=parameters['vid'] #also used as prio check
 
-      if not is_double(vid, sendclock):
+      if not is_doublet(vid, sendclock):
 	if mycontext['vector_clock'][vid] + 1 == sendclock and mycontext['vector_clock'][mycontext['identifier']] == recclock:
 	  mycontext['vector_clock'][mycontext['identifier']] = mycontext['vector_clock'][mycontext['identifier']] + 1
 	  mycontext['vector_clock'][vid] = mycontext['vector_clock'][vid] + 1
@@ -173,13 +177,13 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 # ------------------------------------------------------------------------------
 # Checks if incoming message is a already in history
 # ------------------------------------------------------------------------------
-def is_double(author, seqnum):
+
+def is_doublet(author, seqnum):
   for msg in mycontext['history']:
     if author == msg[3] and seqnum == msg[4]:
-      print "double detected"
+      print "doublet detected"
       return True
   return False
-
 
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
@@ -237,7 +241,7 @@ def get_entry(entryID):
 	return mycontext['idhash'][int(entryID)]
 
 # ------------------------------------------------------------------------------
-# Update entries recursively   
+# Update entries recursively. Will probably not use
 # --------------------------------------------------------------------------
 def update_entry(entry,entryID):
 	if(entryID <= mycontext['id']):
@@ -248,14 +252,56 @@ def update_entry(entry,entryID):
 		mycontext['id'] = mycontext['id']+1
 		add_entry(entry,mycontext['id'])
 # ------------------------------------------------------------------------------
-# merge shit, pop rollback history 
+# merge histories 
+# pop from stack and add to queue, top off stack is oldest and first in queue. 
 # ------------------------------------------------------------------------------
 def merge_history(remote_history,rollback_history):
-  return
+  action_queue = []
+  while remote_history != [] and rollback_history != []:
+    if remote_history[0][3] > rollback_history[0][3]:
+      action_queue.append(remote_history.pop())
+    else:
+      action_queue.append(rollback_history.pop())   
+
+  # if there is remote history left add it     
+  while remote_history != []: 
+    action_queue.append(remote_history.pop())
+
+  # if there is rollback history left add it    
+  while rollback_history !=[]: 
+    action_queue.append(rollback_history.pop())
+  return action_queue 
 
 # ------------------------------------------------------------------------------
-# compare vectorclocks to see rollback and history size 
+# merge history  
+# ------------------------------------------------------------------------------
+#def merge_history(remote_history,rollback_history):
+#  action_queue = []
+#  if remote_action[3] > rollback_action[3]:
+#    action_queue.append(remote_history.pop())
+#    action_queue.append(rollback_history.pop())
+#  else:
+#    action_queue.append(rollback_history.pop()) 
+#    action_queue.append(remote_history.pop())
+
+# ------------------------------------------------------------------------------
+# do action, argument: action tuple 
+# ------------------------------------------------------------------------------
+def do_action(action):
+	mycontext['history'].append(action)
+	mycontext['vector_clock'][action[3]] += 1   
+	if action[0] == "ADD":
+	  mycontext['id'] += 1  
+	  add_entry(action[1],action[2])
+	elif action[0] ==  "DELETE":
+	  delete_entry(action[2])
+	elif action[0] == "MODIFY":
+	  modify_entry(action[1][0], action[2])
+
+# ------------------------------------------------------------------------------
+# Compare vectorclocks to see rollback and history size 
 # -----------------------------------------------------------------------------
+
 def check_clock(in_clock,our_clock):
   historySize = 0
   rollbackSize = 0 
@@ -268,7 +314,7 @@ def check_clock(in_clock,our_clock):
   return (historySize,rollbackSize)
 
 # ------------------------------------------------------------------------------
-# Format 
+# Format string to dict 
 # ---------------------------------------------------------------------------- 
 def format_vector(string):
   vectordict = {}
@@ -284,28 +330,54 @@ def format_vector(string):
 # return pop history
 # use history in merge_history 
 # ------------------------------------------------------------------------------
-def rollback(lag,num):
-  print "----------ROLLBACK------------"
-  print "history: "
-  print mycontext['history']
-  lastupdate = mycontext['history'][-num]
-  if lag != 0:
-    if lastupdate[0] == "ADD":
-      delete_entry(lastupdate[2])
-    elif lastupdate[0] == "DELETE": 
-      add_entry(lastupdate[1],lastupdate[2])
-    elif lastupdate[0]=="MODIFY":
-      modify_entry(lastupdate[1][1],lastupdate[2])
-    rollback(lag-1,num+1)     
-  else:
-    update_board(1)
+#def rollback(lag,num):
+#  print "----------ROLLBACK------------"
+#  print "history: "
+#  print mycontext['history']
+#  rollbackstack = []
+#  lastupdate = mycontext['history'][-num]
+#  if lag != 0:
+#    if lastupdate[0] == "ADD":
+#      delete_entry(lastupdate[2])
+#    elif lastupdate[0] == "DELETE": 
+#      add_entry(lastupdate[1],lastupdate[2])
+#    elif lastupdate[0]=="MODIFY":
+#      modify_entry(lastupdate[1][1],lastupdate[2])
+#    rollback(lag-1,num+1)     
+#  else:
+#    update_board(1)
 
 # ------------------------------------------------------------------------------
-# Send message to other vessels. Try as many times as specified by testnmbr
+# Rollback history as many times as specified by the argument lag 
+# return pop history
+# use history in merge_history 
+# the top entry in the rollback_stack is the oldest
+# rollback clock and id to make merging easier 
+# ------------------------------------------------------------------------------
+
+def rollback(lag):
+	rollback_stack = []
+	for i in range(lag):
+	  lastupdate = mycontext['history'].pop()
+	  mycontext['vector_clock'][lastupdate[3]] -= 1 
+	  if lastupdate[0] == "ADD":
+	    mycontext['id'] -= 1
+	    delete_entry(lastupdate[2])
+	  elif lastupdate[0] == "DELETE":
+	    add_entry(lastupdate[1],lastupdate[2])
+	  elif lastupdate[0] == "MODIFY":
+	    modify_entry(lastupdate[1][1],lastupdate[2])
+	  rollback_queue.append(lastupdate)
+	return rollback_stack
+
+# ------------------------------------------------------------------------------
+# Request history, return remote history stack, oldest on top
+#
+# Request everything in one big message 
+#
 # ----------------------------------------------------------------------------  
-
-
-
+def request_history(historySize,vessel):
+  return 
 # ------------------------------------------------------------------------------
 # Send message to other vessels. Try as many times as specified by testnmbr
 # ----------------------------------------------------------------------------  
@@ -321,9 +393,9 @@ def send_to_vessel(entry,entryID,action,testnmbr,sock):
     else: 
       sendID = sock[1] 
 
-    http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID)+"&vid="
-                                   +mycontext['identifier']+"&sendclock="+str(mycontext['vector_clock'][mycontext['identifier']])
-                                   +"&recclock="+str(mycontext['vector_clock'][sendID])+"&vectorclock="+str(mycontext['vector_clock']))
+    http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="
+    	                            +str(entryID)+"&vid="+mycontext['identifier']
+    	                            +"&vectorclock="+str(mycontext['vector_clock']))
     
     if action == "ADD": 
       socketobject = openconn(sock[0],int(sock[1]))
@@ -466,7 +538,9 @@ if callfunc == 'initialize':
 
   # Ring-topology for electing leader 
   vector_clock = {}
-  mycontext['vector_clock'] = vector_clock
+  mycontext['vector_clock'] =  vector_clock
+  mycontext['rollback_history'] = []
+  mycontext['remote_history'] = []
 
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
