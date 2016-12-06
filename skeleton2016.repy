@@ -41,10 +41,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     elif msgheader.startswith( 'POST /board' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)  
-      add_action = ("ADD"
-      	            ,parameters['entry']
-      	            ,mycontext['id']+1
-      	            ,mycontext['identifier']
+      add_action = ("ADD",parameters['entry'],mycontext['id']+1,mycontext['identifier']
       	            ,mycontext['vector_clock'][mycontext['identifier']]+1) 
       do_action(add_action)
       send_to_vessels(parameters['entry'],mycontext['id'],"ADD",3)
@@ -59,20 +56,14 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       entryID = int(msgheader.split('/')[2].split(' ')[0])
 
       if parameters['delete']==str(1):
-      	delete_action = ("DELETE"
-      		               ,get_entry(entryID)
-      		               ,entryID
-      		               ,mycontext['identifier']
+      	delete_action = ("DELETE",get_entry(entryID),entryID,mycontext['identifier']
       		               ,mycontext['vector_clock'][mycontext['identifier']]+1) 
       	do_action(delete_action)
         send_to_vessels("", entryID, "DELETE",3)
   
       elif parameters['delete']==str(0): 
-        modify_action = ("MODIFY"
-        	               ,(parameters['entry'],get_entry(entryID))
-        	               ,entryID
-        	               ,mycontext['identifier']
-        	               ,mycontext['vector_clock'][mycontext['identifier']]+1)
+        modify_action = ("MODIFY",(parameters['entry'],get_entry(entryID)),entryID
+        	               ,mycontext['identifier'],mycontext['vector_clock'][mycontext['identifier']]+1)
         do_action(modify_action)
         send_to_vessels(parameters['entry'], entryID, "MODIFY",3)
 
@@ -80,8 +71,8 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       sockobj.send(res)
       stopcomm(thiscommhandle)
 
-     #----Receive add from vessels and update board----  MAYBE ADD LOCK? 
-     #----send action as parameter 
+     #----Receive add,mod and del from vessels and update board----  
+     #----MAYBE ADD LOCK? 
     elif msgheader.startswith( 'POST /neighbour' ):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
@@ -99,23 +90,11 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       if rollbackSize > 0:
         rollback_history = rollback(rollbackSize)
       if parameters['action'] == "ADD": 
-        action=("ADD"
-        	      ,entry
-        	      ,entryID
-        	      ,vid 
-        	      ,remote_clock[vid])
+        action=("ADD",entry,entryID,vid,remote_clock[vid])
       elif parameters['action'] == "DELETE":  
-        action=("DELETE"
-      		      ,get_entry(entryID)
-      		      ,entryID
-      		      ,vid
-      		      ,remote_clock[vid])
+        action=("DELETE",get_entry(entryID),entryID,vid,remote_clock[vid])
       elif parameters['action'] == "MODIFY":
-        action=("MODIFY"
-        	      ,(parameters['entry'],get_entry(entryID))
-        	      ,entryID
-        	      ,vid
-        	      ,remote_clock[vid])
+        action=("MODIFY",(parameters['entry'],get_entry(entryID)),entryID,vid,remote_clock[vid])
       remote_history.append(action)
         
       if requestSize > 1:
