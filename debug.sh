@@ -1,2 +1,2 @@
 #!/bin/bash
-curl -d 'debug=3' -X 'DEBUG' 'http://192.168.0.101:63118'
+curl -d 'id=63120' -X 'POST /reqhistory' 'http://129.16.24.204:63119'

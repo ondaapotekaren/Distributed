@@ -93,7 +93,6 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       stopcomm(thiscommhandle)
 
      #----Receive add,mod and del from vessels and update board----   
-     #----this is stupid, redo :( 
      #----MAYBE ADD LOCK? 
     elif msgheader.startswith( 'POST /neighbour' ):
 
@@ -104,7 +103,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       entry=parameters['entry']
       entryID=int(parameters['entryID'])
       vid=parameters['vid']
-      vector_tuple=format_to_tuple(parameters['vectortuple'])
+      vector_tuple= format_to_tuple(parameters['vectortuple'])
       remote_clock = format_to_dict(parameters['vectorclock'])
       syncval = check_clock(remote_clock,mycontext['vector_clock']) 
       behindSize = syncval[0]
@@ -115,53 +114,27 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 
       if behindSize == 1 and aheadSize == 0:
         #everything is fine
-    
-        #--UNSAFE ADDING!!! SHOULD BE DONE IN SET CLOCK--
-        mycontext['vector_clock'][vid]+=1
+        update_clock(remote_clock)
 
         action = (vector_tuple,parameters['action'],entry,entryID)
         mycontext['history'].append(action)
         do_action(action)
+      else:
+        request_history(vid)
 
-      elif behindSize == 0 and aheadSize > 0:
-        # I am ahead, do what? 
-        return           
-      
-      #take the highest value in all vector entries? 
-      #set_clock
+    elif msgheader.startswith('POST /reqhistory'):
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      send_history(parameters['id'])
+    elif msgheader.startswith('POST /history'):
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      remote_clock = format_to_dict(parameters['vectorclock'])
 
-      if False: 
-        redo_history(merge_history(remote_history,mycontext['history']))
-
-      #if is_doublet(vid, remote_clock[vid]):
-      #	return 
-      #if aheadSize > 0:
-      #  rollback_history = rollback(rollbackSize)
-        # A(3,0), B(0,3)
-        # if B rolls back and merges
-        # its clock will say B(3,3)
-        # A will only notice that it's behind but should also rollback merge
-      #  send_merge_msg()
-      #if parameters['action'] == "ADD": 
-      #  action=("ADD",entry,entryID,vid,remote_clock[vid])
-      #elif parameters['action'] == "DELETE":  
-      #  action=("DELETE",get_entry(entryID),entryID,vid,remote_clock[vid])
-      #elif parameters['action'] == "MODIFY":
-      #  action=("MODIFY",(parameters['entry'],get_entry(entryID)),entryID,vid,remote_clock[vid])
-      #remote_history.append(action)
-      #  
-      #if behindSize > 1:
-     # 	# the oldest action is on the top of the stack 
-     #   remote_history += request_history(requestSize,vid)
-			#
-      #action_queue = merge_history(remote_history,rollback_history) 
-     
-
-
-
-      # now Fukuyama is right ;), add everything
-      #for action in action_queue:
-      #  do_action(action)
+      merge_history(format_history(parameters['history']),mycontext['history'])
+      #now Fukuyama is right ;), add everything
+      redo_history()
+      update_clock(remote_clock)
 
     #----DEBUG--------------------------------------------
     elif msgheader.startswith( 'DEBUG' ):
@@ -179,12 +152,12 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 # ------------------------------------------------------------------------------
 # Redo the history 
 # ------------------------------------------------------------------------------
-def redo_history(history):
-	#probably shouldn't remove and loop over the same set 
-  temphistory = history
+def redo_history():
+	#probably shouldn't remove and loop over the same set
+  temphistory = mycontext['action_queue']
   mycontext['idhash']={}
   mycontext['id']=0
-  for action in history: 
+  for action in mycontext['action_queue']: 
     if do_action(action) != 0:
       # the action failed, and should be removed from history 
       temphistory.remove(action)
@@ -202,13 +175,6 @@ def set_vector_tuple():
 # ------------------------------------------------------------------------------
 # Checks if incoming message is already in history
 # ------------------------------------------------------------------------------
-#def is_doublet(author, seqnum):
-#  for msg in mycontext['history']:
-#    if author == msg[3] and seqnum == msg[4]:
-#      print "doublet detected"
-#      return True
-#  return False
-
 def is_doublet(vector_tuple):
   for action in mycontext['history']:
     if action[0] == vector_tuple:
@@ -284,45 +250,25 @@ def update_entry(entry,entryID):
 		add_entry(entry,mycontext['id'])
 # ------------------------------------------------------------------------------
 # merge histories 
-# pop from stack and add to queue, top off stack is oldest and first in queue. 
 # ------------------------------------------------------------------------------
-#def merge_history(remote_history,rollback_history):
-#  action_queue = []
-#  while remote_history != [] and rollback_history != []:
-#    if remote_history[0][3] > rollback_history[0][3]:
-#      action_queue.append(remote_history.pop())
-#    else:
-#      action_queue.append(rollback_history.pop())   
-#
-#  # if there is remote history left add it     
-#  while remote_history != []: 
-#    action_queue.append(remote_history.pop())
-#
-#  # if there is rollback history left add it    
-#  while rollback_history !=[]: 
-#    action_queue.append(rollback_history.pop())
-#  return action_queue 
-
 # vector_clock,action,entry,entryID 
 
 def merge_history(remote_history,local_history):
   #removes duplicates and sorts history
   #vector_clock is id 
   #hmm, O(n²)
-  action_queue=[]
-
+  mycontext['action_queue']=[]
   for local_action in local_history:
     doublet=False 
     for remote_action in remote_history:
       if local_action[0] == remote_action[0]:
         doublet = True 
     if not doublet:
-      action_queue+=local_action
+      mycontext['action_queue'].append(local_action)
 
   for remote_action in remote_history:
-    action_queue+=remote_action
-
-  return action_queue.sort()
+    mycontext['action_queue'].append(remote_action)
+  mycontext['action_queue'].sort()
 
 
 # ------------------------------------------------------------------------------
@@ -352,6 +298,14 @@ def check_clock(in_clock,our_clock):
   return (historySize,rollbackSize)
 
 # ------------------------------------------------------------------------------
+# Update_clock
+# ------------------------------------------------------------------------------
+def update_clock(remote_clock):
+  for vesselID in remote_clock.keys():
+    if remote_clock[vesselID] > mycontext['vector_clock'][vesselID]:
+      mycontext['vector_clock'][vesselID] = remote_clock[vesselID]     
+
+# ------------------------------------------------------------------------------
 # Format string to dict 
 # ---------------------------------------------------------------------------- 
 def format_to_dict(string):
@@ -372,44 +326,58 @@ def format_to_tuple(string):
   for value in formatstring:
     vector_tuple += (int(value[1:]),)
   return vector_tuple 
-# ------------------------------------------------------------------------------
-# Rollback history as many times as specified by the argument lag 
-# return pop history
-# use history in merge_history 
-# the top entry in the rollback_stack is the oldest
-# rollback clock and id to make merging easier 
-# ------------------------------------------------------------------------------
-
-def rollback(lag):
-	rollback_stack = []
-	for i in range(lag):
-	  lastupdate = mycontext['history'].pop()
-	  mycontext['vector_clock'][lastupdate[3]] -= 1 
-	  if lastupdate[0] == "ADD":
-	    mycontext['id'] -= 1
-	    delete_entry(lastupdate[2])
-	  elif lastupdate[0] == "DELETE":
-	    add_entry(lastupdate[1],lastupdate[2])
-	  elif lastupdate[0] == "MODIFY":
-	    modify_entry(lastupdate[1][1],lastupdate[2])
-	  rollback_stack.append(lastupdate)  
-	return rollback_stack
 
 # ------------------------------------------------------------------------------
 # Request history, return remote history stack, oldest on top
 #
-# should also do some doublet checking
+# should also do some doublet checkiformat_hng
 #
 # Request everything in one big message 
 #
 # ----------------------------------------------------------------------------  
-def request_history(historySize,vessel):
-  return 
+def request_history(vid):
+  if mycontext['global']:
+    socketobject = openconn(vid,mycontext['port'])
+  else:
+    socketobject = openconn(mycontext['ip'],int(vid))
+  msg = "id="+mycontext['identifier']    
+  http_res = make_http_response(200,'OK',msg)
+  send_object = 'POST /reqhistory' + http_res   
+  socketobject.send(send_object)
+  socketobject.close()
+
 # ------------------------------------------------------------------------------
-# Send message to other vessels. Try as many times as specified by testnmbr
+# Format history  
+# ---------------------------------------------------------------------------- 
+
+def format_history(string):
+  history = []
+  formatstring = string[1:-1].split('((')[1:]
+  for entry in formatstring:
+    action = ()
+    vector_tuple = ()
+    rest = ()
+    splitentry = entry.split(')')
+    for vectorentry in (' ' + splitentry[0]).split(','):
+      vector_tuple += (int(vectorentry[1]),)
+    rest = splitentry[1].split(',')  
+    history.append(( vector_tuple,rest[1][2:-1],rest[2][2:-1],int(rest[3][1:]) ))
+  return history 
+# ------------------------------------------------------------------------------
+# Send history 
 # ----------------------------------------------------------------------------  
-def send_merge_msg():
-  return
+def send_history(vid):
+  if mycontext['global']:
+    socketobject = openconn(vid,mycontext['port'])
+  else:
+    socketobject = openconn(mycontext['ip'],int(vid))
+  msg = ("history="+str(mycontext['history'])
+        +"&vectorclock="+str(mycontext['vector_clock']))    
+  http_res = make_http_response(200,'OK',msg)
+  send_object = 'POST /history' + http_res   
+  socketobject.send(send_object)
+  socketobject.close()
+
 # ------------------------------------------------------------------------------
 # Send message to other vessels. Try as many times as specified by testnmbr
 # ----------------------------------------------------------------------------  
@@ -438,22 +406,6 @@ def send_to_vessel(entry,entryID,action,vector_tuple,testnmbr,sock):
       else:
         print "error in connection to vessel: " + sock[1]
 
-# ------------------------------------------------------------------------------
-# Sends history to vessels out of sync
-# ------------------------------------------------------------------------------
-# if someone behind add to history and sen history
-def send_history(vessel, lag):
-  if lag > 20:
-    #send_board()
-    return
-  else:
-    if mycontext['global']:
-      socketobject = openconn(vessel,int(mycontext['port']))
-    else:
-      socketobject = openconn(mycontext['ip'],vessel)
-    send_list = mycontext['history'][-lag:]
-    for action in send_list:
-      send_to_vessel(action[0], action[1], action[2], 3, ())
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------
@@ -562,6 +514,7 @@ if callfunc == 'initialize':
   mycontext['rollback_history'] = []
   mycontext['place_in_vector'] = 0
   mycontext['remote_history'] = []
+  mycontext['action_queue'] = []
 
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
