@@ -12,7 +12,7 @@
 
 # New History Structure 
 #
-# vector_clock,action,entry,entryID 
+# vector_clock,action,entry,entryID(use vector_clock as init id?) 
 # 
 # on receiving action:
 #  if conflict arises: 
@@ -48,7 +48,10 @@ def start_board():
 # ------------------------------------------------------------------------------    
 def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
   try:
-    msgheader = sockobj.recv(1024) # Receive message
+    #msgheader = ''
+    msgheader = sockobj.recv(1024)
+    print "---MSGHEADER---"
+    print msgheader
     print '****Request:\n%s' % msgheader
     # React depending on message type: HTTP GET or POST, or some other type of communication.
     #----From the browser----
@@ -61,10 +64,11 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       parameters = extract_parameters_from_query(query)  
       mycontext['vector_clock'][mycontext['identifier']]+=1
       vector_tuple = set_vector_tuple()
-      add_action = (vector_tuple,"ADD",parameters['entry'],mycontext['id']+1)
+      entryID=vector_tuple
+      add_action = (vector_tuple,"ADD",parameters['entry'],entryID)
       mycontext['history'].append(add_action)
       do_action(add_action) 
-      send_to_vessels(parameters['entry'],mycontext['id'],"ADD",vector_tuple,3)
+      send_to_vessels(parameters['entry'],vector_tuple,"ADD",entryID,3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
@@ -74,6 +78,14 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entryID = int(msgheader.split('/')[2].split(' ')[0])
+      entryID = reverse_id(entryID)
+      
+      if 0 > entryID:
+      	res = make_http_response(200,'OK','')
+        sockobj.send(res)
+        stopcomm(thiscommhandle)
+        return
+
       mycontext['vector_clock'][mycontext['identifier']]+=1
       vector_tuple = set_vector_tuple()
       if parameters['delete']==str(1):
@@ -96,12 +108,10 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
      #----MAYBE ADD LOCK? 
     elif msgheader.startswith( 'POST /neighbour' ):
 
-      print "----GOT SOME MESSAGE-----"
-
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
-      entryID=int(parameters['entryID'])
+      entryID=format_to_tuple(parameters['entryID'])
       vid=parameters['vid']
       vector_tuple= format_to_tuple(parameters['vectortuple'])
       remote_clock = format_to_dict(parameters['vectorclock'])
@@ -109,6 +119,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       behindSize = syncval[0]
       aheadSize = syncval[1]
       remote_history = []
+
       if is_doublet(vector_tuple):
       	return
 
@@ -119,22 +130,29 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
         action = (vector_tuple,parameters['action'],entry,entryID)
         mycontext['history'].append(action)
         do_action(action)
-      else:
+      elif aheadSize == 0:
         request_history(vid)
+      elif aheadSize > 0:
+      	request_history(vid)
+      	send_merge_msg()
 
     elif msgheader.startswith('POST /reqhistory'):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-      send_history(parameters['id'])
+      send_all_history(parameters['id'])
     elif msgheader.startswith('POST /history'):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       remote_clock = format_to_dict(parameters['vectorclock'])
+      mycontext['buff'] += format_history(parameters['history'])
 
-      merge_history(format_history(parameters['history']),mycontext['history'])
-      #now Fukuyama is right ;), add everything
-      redo_history()
-      update_clock(remote_clock)
+      if parameters['end'] == str(1):
+
+        merge_history(mycontext['buff'],mycontext['history'])
+        mycontext['buff']= []
+        #now Fukuyama is right ;), add everything
+        redo_history()
+        update_clock(remote_clock)
 
     #----DEBUG--------------------------------------------
     elif msgheader.startswith( 'DEBUG' ):
@@ -150,9 +168,44 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     print "Exception in board: %s, %s\n" %(type(e), e)
 
 # ------------------------------------------------------------------------------
+# sort a hash
+# ------------------------------------------------------------------------------    
+
+def reverse_id(entryID): 
+  sorthash = quicksort_hash(mycontext['idhash'])
+  if len(sorthash)>entryID:
+    return sorthash[entryID]
+  else: 
+    return -1
+# ------------------------------------------------------------------------------
+# sort a hash
+# ------------------------------------------------------------------------------
+
+def quicksort_hash(ahash):
+  alist = []
+  for key in ahash.keys():
+    alist.append(key)
+  return quicksort(alist)
+
+def quicksort(alist):
+  if len(alist) == 0:
+    return alist 
+  else:
+    mid = alist.pop(0) 
+    smaller = [y for y in alist if y <= mid]
+    greater = [z for z in alist if z >  mid]
+    return quicksort(smaller) + [mid] + quicksort(greater) 
+
+# ------------------------------------------------------------------------------
+# Redo the history 	
+# ------------------------------------------------------------------------------
+def send_merge_msg():
+  return
+
+# ------------------------------------------------------------------------------
 # Redo the history 
 # ------------------------------------------------------------------------------
-def redo_history():
+def redo_history():	
 	#probably shouldn't remove and loop over the same set
   temphistory = mycontext['action_queue']
   mycontext['idhash']={}
@@ -193,30 +246,39 @@ def get_board_handler(msgheader, sockobj, thiscommhandle):
 # Update entries on the board from entries with seqnumber entryID and upwards 
 # --------------------------------------------------------------------------
 
-def update_board(entryID):
-  if entryID == 1:
-    mycontext['entries']=""
-  if(entryID <= mycontext['id']):
-    if(mycontext['idhash'].has_key(entryID)):
-      entryFormat  = mycontext['entry_template'] %('entries/%d' % (entryID), entryID, mycontext['idhash'][entryID]) 
-      mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
-    update_board(entryID+1)
+#def update_board(entryID):
+#  if entryID == 1:
+#    mycontext['entries']=""
+#  if(entryID <= mycontext['id']):
+#    if(mycontext['idhash'].has_key(entryID)):
+#      entryFormat  = mycontext['entry_template'] %('entries/%s' % (entryID), entryID, mycontext['idhash'][entryID]) 
+#      mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+#    update_board(entryID+1)
 
+def update_board(x):
+  mycontext['entries']=""
+  sortHash =  quicksort_hash(mycontext['idhash'])
+  for entryID in sortHash:
+    entryFormat = mycontext['entry_template'] %('entries/%d' % (sortHash.index(entryID))
+    	                                         , sortHash.index(entryID), mycontext['idhash'][entryID])
+    mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+    mycontext['entries']
 # ------------------------------------------------------------------------------
 # Add entries to hash then call update 
 # ---------------------------------------------------------------------------
 def add_entry(entry,entryID): 
-  mycontext['idhash'][int(entryID)]= entry 
-  update_board(int(entryID))
+  mycontext['idhash'][entryID]= entry 
+  update_board(1)
+  #update_board(int(entryID))
   return 0
 
 # ------------------------------------------------------------------------------
 # Delete entries from hash then call update
 # ---------------------------------------------------------------------------
 def delete_entry(entryID):
-  if mycontext['idhash'].has_key(int(entryID)):
+  if mycontext['idhash'].has_key(entryID):
     entry = get_entry(entryID)
-    del mycontext['idhash'][int(entryID)]
+    del mycontext['idhash'][entryID]
     update_board(1)
     return 0 
   else:
@@ -225,8 +287,8 @@ def delete_entry(entryID):
 # Modify entries in the hash then call update 
 # --------------------------------------------------------------------------
 def modify_entry(entry,entryID):
-  if mycontext['idhash'].has_key(int(entryID)):
-    mycontext['idhash'][int(entryID)] = entry
+  if mycontext['idhash'].has_key(entryID):
+    mycontext['idhash'][entryID] = entry
     update_board(1)
     return 0
   else:
@@ -235,7 +297,7 @@ def modify_entry(entry,entryID):
 # Get entries 
 # --------------------------------------------------------------------------
 def get_entry(entryID): 
-	return mycontext['idhash'][int(entryID)]
+	return mycontext['idhash'][entryID]
 
 # ------------------------------------------------------------------------------
 # Update entries recursively. Will probably not use
@@ -354,29 +416,44 @@ def format_history(string):
   history = []
   formatstring = string[1:-1].split('((')[1:]
   for entry in formatstring:
-    action = ()
     vector_tuple = ()
     rest = ()
     splitentry = entry.split(')')
     for vectorentry in (' ' + splitentry[0]).split(','):
-      vector_tuple += (int(vectorentry[1]),)
+      vector_tuple += (int(vectorentry[1:]),)
     rest = splitentry[1].split(',')  
-    history.append(( vector_tuple,rest[1][2:-1],rest[2][2:-1],int(rest[3][1:]) ))
+    lasttuple = (int(rest[3][2:]),)
+    for x in rest[4:]: 
+      lasttuple += (int(x[1:]),)
+    history.append(( vector_tuple,rest[1][2:-1],rest[2][2:-1],lasttuple ))
   return history 
+
 # ------------------------------------------------------------------------------
 # Send history 
+# make sure 
 # ----------------------------------------------------------------------------  
-def send_history(vid):
+def send_history(vid,history,end):
   if mycontext['global']:
     socketobject = openconn(vid,mycontext['port'])
   else:
     socketobject = openconn(mycontext['ip'],int(vid))
-  msg = ("history="+str(mycontext['history'])
-        +"&vectorclock="+str(mycontext['vector_clock']))    
+  msg = ("history="+str(history)
+        +"&vectorclock="+str(mycontext['vector_clock'])
+        +"&end="+str(end))    
   http_res = make_http_response(200,'OK',msg)
   send_object = 'POST /history' + http_res   
+  #how to use sendall? 
   socketobject.send(send_object)
   socketobject.close()
+
+def send_all_history(vid):
+ x = len(mycontext['history']) / 15
+ i = 0
+ while i < x: 
+   send_history(vid,mycontext['history'][(i*15):(i*15+15)],0)
+   i+=1 
+ else: 
+   send_history(vid,mycontext['history'][(i*15):(i*15+15)],1)
 
 # ------------------------------------------------------------------------------
 # Send message to other vessels. Try as many times as specified by testnmbr
@@ -515,6 +592,7 @@ if callfunc == 'initialize':
   mycontext['place_in_vector'] = 0
   mycontext['remote_history'] = []
   mycontext['action_queue'] = []
+  mycontext['buff'] = []
 
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
