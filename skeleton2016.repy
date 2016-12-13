@@ -48,8 +48,34 @@ def start_board():
 # ------------------------------------------------------------------------------    
 def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
   try:
+
     #msgheader = ''
-    msgheader = sockobj.recv(8000)
+    
+    readBytes = 0
+    msgheader = sockobj.recv(8192)
+    #----DEBUG--------------------------------------------
+    if msgheader.startswith( 'DEBUG' ):
+      #sortHash =  quicksort_hash(mycontext['idhash'])
+      #for entryID in sortHash:
+      #  print "index: " + str(sortHash.index(entryID)) + "id: " + str(entryID) + "content: "  + str(mycontext['idhash'][entryID])
+      mycontext['debugsleep'] = not mycontext['debugsleep']
+      print mycontext['debugsleep']
+
+
+    if not msgheader.startswith( 'GET' ):
+      readBytes=len(msgheader)
+      print msgheader.split('Content-Length: ')
+      content_length = msgheader.split('Content-Length: ')[1]
+      content_length = int(content_length.split('\r\n')[0])
+      
+      print content_length
+      print readBytes
+      tmp = ""
+      while(readBytes < content_length):
+        tmp=sockobj.recv(8192)
+        readBytes += len(tmp)
+        msgheader += tmp
+    
     print "---MSGHEADER---"
     print msgheader
     print '****Request:\n%s' % msgheader
@@ -68,7 +94,8 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       add_action = (vector_tuple,"ADD",parameters['entry'],entryID)
       mycontext['history'].append(add_action)
       do_action(add_action) 
-      send_to_vessels(parameters['entry'],vector_tuple,"ADD",entryID,3)
+      if not mycontext['debugsleep']:
+        send_to_vessels(parameters['entry'],vector_tuple,"ADD",entryID,3)
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
@@ -92,13 +119,15 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       	delete_action=(vector_tuple,"DELETE",parameters['entry'],entryID) 
       	mycontext['history'].append(delete_action)
       	do_action(delete_action,)
-        send_to_vessels("", entryID, "DELETE",vector_tuple,3)
+        if not mycontext['debugsleep']:
+          send_to_vessels("", entryID, "DELETE",vector_tuple,3)
   
       elif parameters['delete']==str(0): 
         modify_action=(vector_tuple,"MODIFY",parameters['entry'],entryID)
         mycontext['history'].append(modify_action)
         do_action(modify_action)
-        send_to_vessels(parameters['entry'], entryID, "MODIFY",vector_tuple,3)
+        if not mycontext['debugsleep']:         
+          send_to_vessels(parameters['entry'], entryID, "MODIFY",vector_tuple,3)
 
       res = make_http_response(200,'OK','')
       sockobj.send(res)
@@ -107,7 +136,11 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
      #----Receive add,mod and del from vessels and update board----   
      #----MAYBE ADD LOCK? 
     elif msgheader.startswith( 'POST /neighbour' ):
-
+      if mycontext['debugsleep']:
+        res = make_http_response(200,'OK','')
+        sockobj.send(res)
+        stopcomm(thiscommhandle)
+        return	
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
@@ -131,15 +164,16 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
         mycontext['history'].append(action)
         do_action(action)
       elif aheadSize == 0:
-        request_history(vid)
+        request_history(vid, behindSize)
       elif aheadSize > 0:
-      	request_history(vid)
+      	request_history(vid, behindSize)
       	send_history(vid,mycontext['history'])
 
     elif msgheader.startswith('POST /reqhistory'):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-      send_history(parameters['id'],mycontext['history'])
+      size = int(parameters['size'])
+      send_history(parameters['id'],mycontext['history'][-size:])
     elif msgheader.startswith('POST /history'):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
@@ -149,16 +183,16 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       #if parameters['end'] == str(1):
 
       merge_history(format_history(parameters['history']),mycontext['history'])
+      mycontext['history'] += remove_duplets(format_history(parameters['history'])
+                                             ,mycontext['history']) 
       #mycontext['buff']= []
       #now Fukuyama is right ;), add everything
+      print mycontext['history']
       redo_history()
       update_clock(remote_clock)
+      print mycontext['history']
 
-    #----DEBUG--------------------------------------------
-    elif msgheader.startswith( 'DEBUG' ):
-      sortHash =  quicksort_hash(mycontext['idhash'])
-      for entryID in sortHash:
-        print "index: " + str(sortHash.index(entryID)) + "id: " + str(entryID) + "content: "  + str(mycontext['idhash'][entryID])
+
      
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
@@ -213,7 +247,7 @@ def redo_history():
     if do_action(action) != 0:
       # the action failed, and should be removed from history 
       temphistory.remove(action)
-  mycontext['history']=temphistory
+  #mycontext['history']=temphistory
 
 # ------------------------------------------------------------------------------
 # Set the vector tuple, used as id
@@ -311,6 +345,25 @@ def update_entry(entry,entryID):
 # ------------------------------------------------------------------------------
 # merge histories 
 # ------------------------------------------------------------------------------
+
+def remove_duplets(remote_history,local_history):
+  for local_action in local_history:
+    doublet=False
+    for remote_action in remote_history:
+      if local_action[0] == remote_action[0]:
+        doublet = True
+        print local_action
+        print remote_action
+    if doublet:
+      remote_history.remove(local_action)
+  return remote_history
+  
+
+
+
+# ------------------------------------------------------------------------------
+# merge histories 
+# ------------------------------------------------------------------------------
 # vector_clock,action,entry,entryID 
 
 def merge_history(remote_history,local_history):
@@ -395,12 +448,12 @@ def format_to_tuple(string):
 # Request everything in one big message 
 #
 # ----------------------------------------------------------------------------  
-def request_history(vid):
+def request_history(vid, size):
   if mycontext['global']:
     socketobject = openconn(vid,mycontext['port'])
   else:
     socketobject = openconn(mycontext['ip'],int(vid))
-  msg = "id="+mycontext['identifier']    
+  msg = "id="+mycontext['identifier']+"&size=" + str(size)   
   http_res = make_http_response(200,'OK',msg)
   send_object = 'POST /reqhistory' + http_res   
   socketobject.send(send_object)
@@ -626,6 +679,8 @@ if callfunc == 'initialize':
 
   #List for local history
   mycontext['history'] = []
+
+  mycontext['debugsleep'] = False
 
 
 	#Read ports(locally) or ip-addresses(globally)
