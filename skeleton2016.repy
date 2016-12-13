@@ -156,11 +156,10 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 
     #----DEBUG--------------------------------------------
     elif msgheader.startswith( 'DEBUG' ):
-      print "-----------DEBUG------------"
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      rollback(int(parameters['debug']))
-
+      sortHash =  quicksort_hash(mycontext['idhash'])
+      for entryID in sortHash:
+        print "index: " + str(sortHash.index(entryID)) + "id: " + str(entryID) + "content: "  + str(mycontext['idhash'][entryID])
+     
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
 
@@ -262,7 +261,6 @@ def update_board(x):
     entryFormat = mycontext['entry_template'] %('entries/%d' % (sortHash.index(entryID))
     	                                         , sortHash.index(entryID), mycontext['idhash'][entryID])
     mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
-    mycontext['entries']
 # ------------------------------------------------------------------------------
 # Add entries to hash then call update 
 # ---------------------------------------------------------------------------

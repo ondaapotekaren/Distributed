@@ -1,5 +1,4 @@
 #!/bin/bash
 for i in `seq 1 20`; do
-curl -d 'entry=t'${i} -X 'POST' 'http://192.168.0.101:63118/board'
-curl -d 'entry=y'${i} -X 'POST' 'http://192.168.0.101:63119/board'
+curl -d 'entry=t'${i} -X 'POST' 'http://10.0.132.48:63118/board'
 done
