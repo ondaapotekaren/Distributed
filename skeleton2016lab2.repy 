@@ -45,7 +45,6 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
-      print_board()
       
     # Delete or Modify entry(sent from browser) 
     elif msgheader.startswith( 'POST /entries' ):
@@ -89,7 +88,6 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
         delete_entry(parameters['entryID'])
         send_to_vessels("",parameters['entryID'], 2,3)  
       mycontext['stoplock'].release()
-      print_board():
 
      #----Receive add from leader-----  
     elif msgheader.startswith( 'POST /neighbour/entries' ):
@@ -98,7 +96,6 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       entry=parameters['entry']
       entryID=parameters['entryID']
       add_entry(entry,int(entryID)) 
-      print_board()
 
     #----Receive modify or delete from leader-----
     elif msgheader.startswith( 'POST /neighbour/delete' ):
@@ -135,21 +132,12 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       mycontext['leader']= leaderID
       if startID != str(mycontext['identifier']): 
       	forward_coordination(mycontext['identifier'],startID,leaderID) 
-     
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
 
   except Exception, e:
     print "Exception in board: %s, %s\n" %(type(e), e)
 
-# ------------------------------------------------------------------------------
-# Handles initial GET request from browser, outputs HTML string and closes socket.
-# ------------------------------------------------------------------------------
-def print_board():
-  print "----------------THE BOARD----------------"
-  for entryID in mycontext['ids']:
-    print "id " + str(entryID) + " entry: "+  str(mycontext['idhash'][entryID])
-  print "\n"
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------

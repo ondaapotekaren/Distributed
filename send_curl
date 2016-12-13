@@ -1,4 +1,20 @@
 #!/bin/bash
-for i in `seq 1 20`; do
-curl -d 'entry=t'${i} -X 'POST' 'http://10.0.132.48:63118/board'
+for i in `seq 1 12`; do
+    curl -d 'entry=a'${i}${j} -X 'POST' 'http://129.16.24.211:63118/board' & 
+    curl -d 'entry=b'${i}${j} -X 'POST' 'http://129.16.24.211:63119/board' &
+    curl -d 'entry=c'${i}${j} -X 'POST' 'http://129.16.24.211:63120/board' & 
+    curl -d 'entry=d'${i}${j} -X 'POST' 'http://129.16.24.211:63121/board' &
+    curl -d 'entry=c'${i}${j} -X 'POST' 'http://129.16.24.211:63122/board' & 
+    curl -d 'entry=d'${i}${j} -X 'POST' 'http://129.16.24.211:63123/board' &
+    curl -d 'entry=c'${i}${j} -X 'POST' 'http://129.16.24.211:63124/board' & 
+    curl -d 'entry=d'${i}${j} -X 'POST' 'http://129.16.24.211:63125/board' &
+    curl -d 'entry=c'${i}${j} -X 'POST' 'http://129.16.24.211:63126/board' & 
+    curl -d 'entry=d'${i}${j} -X 'POST' 'http://129.16.24.211:63127/board' &
+
 done
+
+
+
+
+
+
