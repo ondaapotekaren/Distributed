@@ -1,21 +1,46 @@
 # FEEL FREE TO CHANGE THE CODE. 
 # This is just a dull example
+# ------------------------------------------------------------------------------   
+
+# ------------------------------------------------------------------------------
+# History strucure
+# "ADD", entry, entryID, author, seq_number 
+# "DELETE", entry, entryID, author, seq_number
+# "MODIFY", (newEntry, oldEntry), entryID, author, seq_number
+# ------------------------------------------------------------------------------ 
+
+
+# New History Structure 
+#
+# vector_clock,action,entry,entryID(use vector_clock as init id?) 
+# 
+# on receiving action:
+#  if conflict arises: 
+#    require history 
+#      (either all history or loop through the list on the sender until vector_clocks matches)
+#    merge history lists, disregard doublets 
+#    vipe old history 
+#    vipe old id-hash 
+#    do actions from merged history 
+#    finished!
+#  if conflict don't arise: 
+#    just add new entry 
+#    finished! 
 
 # ------------------------------------------------------------------------------   
 # Start listening and handle incoming connections in board() function
+# Also star leader election after 5 second 
 # ------------------------------------------------------------------------------   
+
 def start_board():
   ip = mycontext['ip']
   port = mycontext['port']
   print "Listening on IP " + str(ip) +" port " + str(port)
   try:   
     listencommhandle = waitforconn(ip, port, board_connection_handler)  
-    sleep(5) 
-    init_election(mycontext['identifier'])
   except Exception, e:
     print "Exception in start_board: %s, %s\n" %(type(e), e)
     raise
-    #pass
 
 # ------------------------------------------------------------------------------    
 # Called when an incoming message is received. 
@@ -23,119 +48,163 @@ def start_board():
 # ------------------------------------------------------------------------------    
 def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
   try:
-    msgheader = sockobj.recv(1024) # Receive message
-    print '****Request:\n%s' % msgheader
+
+    #msgheader = ''
+    
+    readBytes = 0
+    msgheader = sockobj.recv(8192)
+    #----DEBUG--------------------------------------------
+    if msgheader.startswith( 'DEBUG' ):
+      #sortHash =  quicksort_hash(mycontext['idhash'])
+      #for entryID in sortHash:
+      #  print "index: " + str(sortHash.index(entryID)) + "id: " + str(entryID) + "content: "  + str(mycontext['idhash'][entryID])
+      mycontext['debugsleep'] = not mycontext['debugsleep']
+      print mycontext['debugsleep']
+
+
+    if not msgheader.startswith( 'GET' ):
+      readBytes=len(msgheader)
+      #print msgheader.split('Content-Length: ')
+      content_length = msgheader.split('Content-Length: ')[1]
+      content_length = int(content_length.split('\r\n')[0])
+      
+      # content_length
+      #print readBytes
+      tmp = ""
+      while(readBytes < content_length):
+        tmp=sockobj.recv(8192)
+        readBytes += len(tmp)
+        msgheader += tmp
+    
+    #print "---MSGHEADER---"
+    #print msgheader
+    #print '****Request:\n%s' % msgheader
     # React depending on message type: HTTP GET or POST, or some other type of communication.
     #----From the browser----
     if msgheader.startswith( 'GET' ):
       get_board_handler(msgheader, sockobj, thiscommhandle)    
 
-    # Add entry(sent from browser)
+    #----Add entry(sent from browser)----
     elif msgheader.startswith( 'POST /board' ):
+      #mycontext['stoplock'].acquire()
       query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      if(mycontext['identifier']==mycontext['leader']):
-        mycontext['stoplock'].acquire()
-        mycontext['id']=mycontext['id']+1 
-        add_entry(parameters['entry'],mycontext['id'])
-        send_to_vessels(parameters['entry'],mycontext['id'],1,3)
-        mycontext['stoplock'].release()
-      else: 
-        send_to_leader(parameters['entry'],0,1,3)
+      parameters = extract_parameters_from_query(query)  
+      mycontext['vector_clock'][mycontext['identifier']]+=1
+      vector_tuple = set_vector_tuple()
+      entryID=vector_tuple
+      add_action = (vector_tuple,"ADD",parameters['entry'],entryID)
+      mycontext['history'].append(add_action)
+      do_action(add_action)
+      #mycontext['stoplock'].release() 
+      if not mycontext['debugsleep']:
+        send_to_vessels(parameters['entry'],vector_tuple,"ADD",entryID,1)
+      
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
-      print_board()
-      
-    # Delete or Modify entry(sent from browser) 
+
+    #----Delete or Modify entry(sent from browser)---- 
     elif msgheader.startswith( 'POST /entries' ):
+      #mycontext['stoplock'].acquire()
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
-      entryID = msgheader.split('/')[2].split(' ')[0]
-      if(mycontext['identifier']==mycontext['leader']):
-        mycontext['stoplock'].acquire()
-        if parameters['delete']==str(1):
-          delete_entry(entryID)
-          send_to_vessels("", entryID, 2,10)
-        elif parameters['delete']==str(0): 
-          modify_entry(parameters['entry'], entryID)
-          send_to_vessels(parameters['entry'], entryID, 3,3) 
-        mycontext['stoplock'].release()
-      else: 
-        if parameters['delete']==str(1):
-          send_to_leader("",entryID,2,3)
-        elif parameters['delete']==str(0):
-          send_to_leader(parameters['entry'],entryID,3,3) 
+      entryID = int(msgheader.split('/')[2].split(' ')[0])
+      entryID = reverse_id(entryID)
+      
+      if 0 > entryID:
+      	res = make_http_response(200,'OK','')
+        sockobj.send(res)
+        stopcomm(thiscommhandle)
+        return
+
+      mycontext['vector_clock'][mycontext['identifier']]+=1
+      vector_tuple = set_vector_tuple()
+      if parameters['delete']==str(1):
+      	delete_action=(vector_tuple,"DELETE",parameters['entry'],entryID) 
+      	mycontext['history'].append(delete_action)
+      	do_action(delete_action,)
+        #mycontext['stoplock'].release()
+        if not mycontext['debugsleep']:
+          send_to_vessels("", entryID, "DELETE",vector_tuple,1)
+  
+      elif parameters['delete']==str(0): 
+        modify_action=(vector_tuple,"MODIFY",parameters['entry'],entryID)
+        mycontext['history'].append(modify_action)
+        do_action(modify_action)
+        #mycontext['stoplock'].release()
+        if not mycontext['debugsleep']:         
+          send_to_vessels(parameters['entry'], entryID, "MODIFY",vector_tuple,1)
+      
       res = make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
 
-    #----Receive as leader----
-    elif msgheader.startswith('POST /leader'):
-      mycontext['stoplock'].acquire() 
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      #----add request as leader   
-      if(msgheader.startswith('POST /leader/entries')):
-        mycontext['id']=mycontext['id']+1            
-        add_entry(parameters['entry'],mycontext['id'])
-        send_to_vessels(parameters['entry'],mycontext['id'],1,3)
-      #----modify request as leader
-      elif(msgheader.startswith('POST /leader/modify')):
-        modify_entry(parameters['entry'], parameters['entryID'])
-        send_to_vessels(parameters['entry'],parameters['entryID'], 3,3) 
-      #----delete request as leader
-      elif(msgheader.startswith('POST /leader/delete')):
-        delete_entry(parameters['entryID'])
-        send_to_vessels("",parameters['entryID'], 2,3)  
-      mycontext['stoplock'].release()
-      print_board():
-
-     #----Receive add from leader-----  
-    elif msgheader.startswith( 'POST /neighbour/entries' ):
+     #----Receive add,mod and del from vessels and update board----   
+     #----MAYBE ADD LOCK? 
+    elif msgheader.startswith( 'POST /neighbour' ):
+      if mycontext['debugsleep']:
+        res = make_http_response(200,'OK','')
+        sockobj.send(res)
+        stopcomm(thiscommhandle)
+        return	
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
-      entryID=parameters['entryID']
-      add_entry(entry,int(entryID)) 
+      entryID=format_to_tuple(parameters['entryID'])
+      vid=parameters['vid']
+      vector_tuple= format_to_tuple(parameters['vectortuple'])
+      remote_clock = format_to_dict(parameters['vectorclock'])
+      syncval = check_clock(remote_clock,mycontext['vector_clock']) 
+      behindSize = syncval[0]
+      aheadSize = syncval[1]
+      remote_history = []
+      
+      if is_doublet(vector_tuple):
+      	return
+
+      if behindSize == 1 and aheadSize == 0:
+        #everything is fine
+        update_clock(remote_clock)
+
+        action = (vector_tuple,parameters['action'],entry,entryID)
+        mycontext['history'].append(action)
+        do_action(action)
+      #elif aheadSize == 0:
+        #request_history(vid, behindSize)
+      else: 
+        #aheadSize > 0:
+      	request_history(vid, behindSize)
+      	send_history(vid,mycontext['history'])
+      
+
+    elif msgheader.startswith('POST /reqhistory'):
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      size = int(parameters['size'])
+      send_history(parameters['id'],mycontext['history'])
+    elif msgheader.startswith('POST /history'):
+      query = extract_http_request_contents(msgheader)
+      parameters = extract_parameters_from_query(query)
+      remote_clock = format_to_dict(parameters['vectorclock'])
+      #mycontext['buff'] += format_history(parameters['history'])
+
+      #if parameters['end'] == str(1):
+
+      merge_history(format_history(parameters['history']),mycontext['history'])
+      #mycontext['history'] += remove_duplets(format_history(parameters['history'])
+      #                                       ,mycontext['history']) 
+      #mycontext['buff']= []
+      #now Fukuyama is right ;), add everything
+      #print mycontext['history']
+      redo_history()
+      update_clock(remote_clock)
+      #print mycontext['history']
+
+    if not msgheader.startswith( 'GET' ):
+      print_board()
+    if not msgheader.startswith('POST /reqhistory'):
       print_board()
 
-    #----Receive modify or delete from leader-----
-    elif msgheader.startswith( 'POST /neighbour/delete' ):
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      delete_entry(parameters['entryID'])
-
-    elif msgheader.startswith( 'POST /neighbour/modify' ):
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      entry = parameters['entry']
-      entryID = parameters['entryID']
-      modify_entry(entry, entryID)
-      
-    #----LEADER ELECTION----
-    # Election/startID/leaderID/randomNumber
-    elif msgheader.startswith( 'POST /election'):
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      startID = parameters['startID']
-      leaderID = parameters['leaderID']
-      randomNumber = parameters['randomNumber']
-      if startID == str(mycontext['identifier']):
-        mycontext['leader'] = leaderID
-        start_coordination(mycontext['identifier'])
-      else: 
-        forward_election(mycontext['identifier'],startID,leaderID,randomNumber)   
-
-    elif msgheader.startswith( 'POST /coordination'):    
-      query = extract_http_request_contents(msgheader)
-      parameters = extract_parameters_from_query(query)
-      startID = parameters['startID']
-      leaderID = parameters['leaderID']
-      mycontext['leader']= leaderID
-      if startID != str(mycontext['identifier']): 
-      	forward_coordination(mycontext['identifier'],startID,leaderID) 
-     
     else:
       other_requests_handler(msgheader, sockobj, thiscommhandle)
 
@@ -143,13 +212,82 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
     print "Exception in board: %s, %s\n" %(type(e), e)
 
 # ------------------------------------------------------------------------------
-# Handles initial GET request from browser, outputs HTML string and closes socket.
+# sort a hash
+# ------------------------------------------------------------------------------    
+
+def reverse_id(entryID): 
+  sorthash = quicksort_hash(mycontext['idhash'])
+  if len(sorthash)>entryID:
+    return sorthash[entryID]
+  else: 
+    return -1
 # ------------------------------------------------------------------------------
+# sort a hash
+# ------------------------------------------------------------------------------
+
+def quicksort_hash(ahash):
+  alist = []
+  for key in ahash.keys():
+    alist.append(key)
+  return quicksort(alist)
+
+def quicksort(alist):
+  if len(alist) == 0:
+    return alist 
+  else:
+    mid = alist.pop(0) 
+    smaller = [y for y in alist if y <= mid]
+    greater = [z for z in alist if z >  mid]
+    return quicksort(smaller) + [mid] + quicksort(greater) 
+
+# ------------------------------------------------------------------------------
+# sort a hash
+# ------------------------------------------------------------------------------ 
 def print_board():
-  print "----------------THE BOARD----------------"
-  for entryID in mycontext['ids']:
-    print "id " + str(entryID) + " entry: "+  str(mycontext['idhash'][entryID])
+  print "----------------THE BOARD---------------------"
+  sortedlist = quicksort_hash(mycontext['idhash'])
+  for entryID in sortedlist:
+    print "index: " + str(sortedlist.index(entryID)) + " entry: " + mycontext['idhash'][entryID] + " id: " + str(entryID)
+  print "vector clock: " + str(mycontext['vector_clock'])
   print "\n"
+# ------------------------------------------------------------------------------
+# Redo the history 	
+# ------------------------------------------------------------------------------
+def send_merge_msg():
+  return
+
+# ------------------------------------------------------------------------------
+# Redo the history 
+# ------------------------------------------------------------------------------
+def redo_history():	
+	#probably shouldn't remove and loop over the same set
+  temphistory = mycontext['action_queue']
+  mycontext['idhash']={}
+  mycontext['id']=0
+  for action in mycontext['action_queue']: 
+    if do_action(action) != 0:
+      # the action failed, and should be removed from history 
+      temphistory.remove(action)
+  mycontext['history']=temphistory
+
+# ------------------------------------------------------------------------------
+# Set the vector tuple, used as id
+# ------------------------------------------------------------------------------
+def set_vector_tuple():
+  vector_tuple = ()
+  sortedHash = quicksort_hash(mycontext['vector_clock'])
+  for key in sortedHash:
+    vector_tuple = vector_tuple + (mycontext['vector_clock'][key],)
+  return vector_tuple
+
+# ------------------------------------------------------------------------------
+# Checks if incoming message is already in history
+# ------------------------------------------------------------------------------
+def is_doublet(vector_tuple):
+  for action in mycontext['history']:
+    if action[0] == vector_tuple:
+      return True 
+  return False 
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------
@@ -160,202 +298,289 @@ def get_board_handler(msgheader, sockobj, thiscommhandle):
   stopcomm(thiscommhandle) 
 
 # ------------------------------------------------------------------------------
-# OUR IMPLEMENTATION
-# Update mycontext['entries'], using mycontext['ids'] to loop 
-# ---------------------------------------------------------------------------
-def update_entries():
+# Update entries on the board from entries with seqnumber entryID and upwards 
+# --------------------------------------------------------------------------
+
+#def update_board(entryID):
+#  if entryID == 1:
+#    mycontext['entries']=""
+#  if(entryID <= mycontext['id']):
+#    if(mycontext['idhash'].has_key(entryID)):
+#      entryFormat  = mycontext['entry_template'] %('entries/%s' % (entryID), entryID, mycontext['idhash'][entryID]) 
+#      mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
+#    update_board(entryID+1)
+
+def update_board():
   mycontext['entries']=""
-  for entryID in mycontext['ids']:
-    entryFormat  = mycontext['entry_template'] %('entries/%d' % (entryID), entryID, mycontext['idhash'][entryID])
+  sortHash =  quicksort_hash(mycontext['idhash'])
+  for entryID in sortHash:
+    entryFormat = mycontext['entry_template'] %('entries/%d' % (sortHash.index(entryID))
+    	                                         , sortHash.index(entryID), mycontext['idhash'][entryID])
     mycontext['entries'] = ''.join( [ mycontext['entries'], entryFormat] )
-
 # ------------------------------------------------------------------------------
-# OUR IMPLEMENTATION
-# Adding entries to hash, then updating 
+# Add entries to hash then call update 
 # ---------------------------------------------------------------------------
-def add_entry(entry,entryID):
-  mycontext['id'] = int(entryID)
-  mycontext['ids'].append(mycontext['id']) 
-  mycontext['idhash'][mycontext['id']]= entry 
-  update_entries()
+def add_entry(entry,entryID): 
+  mycontext['idhash'][entryID]= entry 
+  update_board()
+  #update_board(int(entryID))
+  return 0
 
 # ------------------------------------------------------------------------------
-# OUR IMPLEMENTATION
-# Deleting entries from hash, then updating  
+# Delete entries from hash then call update
 # ---------------------------------------------------------------------------
 def delete_entry(entryID):
-  if int(entryID) in mycontext['ids']:
-    del mycontext['idhash'][int(entryID)]
-    mycontext['ids'].remove(int(entryID))
-    update_entries()
+  if mycontext['idhash'].has_key(entryID):
+    entry = get_entry(entryID)
+    del mycontext['idhash'][entryID]
+    update_board()
+    return 0 
+  else:
+    return 1 
 # ------------------------------------------------------------------------------
-# OUR IMPLEMENTATION
-# Modifying entries in the hash, then updating  
+# Modify entries in the hash then call update 
 # --------------------------------------------------------------------------
 def modify_entry(entry,entryID):
-  mycontext['idhash'][int(entryID)] = entry
-  update_entries()
+  if mycontext['idhash'].has_key(entryID):
+    mycontext['idhash'][entryID] = entry
+    update_board()
+    return 0
+  else:
+    return 1
+# ------------------------------------------------------------------------------
+# Get entries 
+# --------------------------------------------------------------------------
+def get_entry(entryID): 
+	return mycontext['idhash'][entryID]
 
 # ------------------------------------------------------------------------------
-# OUR IMPLEMENTATION
-# Sends to other vessels 
-# action = 1 : INSERT  
-# action = 2 : DELETE
-# action = 3 : MODIFY
+# Update entries recursively. Will probably not use
+# --------------------------------------------------------------------------
+def update_entry(entry,entryID):
+	if(entryID <= mycontext['id']):
+		moveEntry = get_entry(entryID)
+		modify_entry(entry,entryID)
+		update_entry(moveEntry,entryID+1) 
+	else:
+		mycontext['id'] = mycontext['id']+1
+		add_entry(entry,mycontext['id'])
+# ------------------------------------------------------------------------------
+# merge histories 
+# ------------------------------------------------------------------------------
+
+def remove_duplets(remote_history,local_history):
+  for local_action in local_history:
+    doublet=False
+    for remote_action in remote_history:
+      if local_action[0] == remote_action[0]:
+        doublet = True
+    if doublet:
+      remote_history.remove(local_action)
+  return remote_history
+  
+
+
+
+# ------------------------------------------------------------------------------
+# merge histories 
+# ------------------------------------------------------------------------------
+# vector_clock,action,entry,entryID 
+
+def merge_history(remote_history,local_history):
+  #removes duplicates and sorts history
+  #vector_clock is id 
+  #hmm, O(n²)
+  mycontext['action_queue']=[]
+  for local_action in local_history:
+    doublet=False 
+    for remote_action in remote_history:
+      if local_action[0] == remote_action[0]:
+        doublet = True 
+    if not doublet:
+      mycontext['action_queue'].append(local_action)
+
+  for remote_action in remote_history:
+    mycontext['action_queue'].append(remote_action)
+  mycontext['action_queue'].sort()
+
+
+# ------------------------------------------------------------------------------
+# do action, argument: action tuple 
+# ------------------------------------------------------------------------------
+def do_action(action):  
+  if action[1] == "ADD": 
+    mycontext['id']+=1
+    return add_entry(action[2],action[3])
+  elif action[1] ==  "DELETE":
+    return delete_entry(action[3])
+  elif action[1] == "MODIFY":
+    return modify_entry(action[2],action[3])
+# ------------------------------------------------------------------------------
+# Compare vectorclocks to see rollback and history size 
+# -----------------------------------------------------------------------------
+
+def check_clock(in_clock,our_clock):
+  historySize = 0
+  rollbackSize = 0 
+  for key in our_clock: 
+    size = in_clock[key]-our_clock[key]
+    if(size>0):
+      historySize = historySize + size  
+    elif(size<0):
+      rollbackSize = rollbackSize + size*(-1)
+  return (historySize,rollbackSize)
+
+# ------------------------------------------------------------------------------
+# Update_clock
+# ------------------------------------------------------------------------------
+def update_clock(remote_clock):
+  for vesselID in remote_clock.keys():
+    if remote_clock[vesselID] > mycontext['vector_clock'][vesselID]:
+      mycontext['vector_clock'][vesselID] = remote_clock[vesselID]     
+
+# ------------------------------------------------------------------------------
+# Format string to dict 
+# ---------------------------------------------------------------------------- 
+def format_to_dict(string):
+  vectordict = {}
+  formatstring = (" " + string[1:-1]).split(',')
+  for pair in formatstring:
+     key = pair.split(':')[0][2:-1]
+     value = int(pair.split(':')[1][1:])
+     vectordict[key] = int(value)
+  return vectordict    
+
+# ------------------------------------------------------------------------------
+# Format string to tuple 
+# ---------------------------------------------------------------------------- 
+def format_to_tuple(string):
+  vector_tuple = ()
+  formatstring = (' ' + string[1:-1]).split(',')
+  for value in formatstring:
+    vector_tuple += (int(value[1:]),)
+  return vector_tuple 
+
+# ------------------------------------------------------------------------------
+# Request history, return remote history stack, oldest on top
+#
+# should also do some doublet checkiformat_hng
+#
+# Request everything in one big message 
+#
+# ----------------------------------------------------------------------------  
+def request_history(vid, size):
+  if mycontext['global']:
+    socketobject = openconn(vid,mycontext['port'])
+  else:
+    socketobject = openconn(mycontext['ip'],int(vid))
+  msg = "id="+mycontext['identifier']+"&size=" + str(size)   
+  http_res = make_http_response(200,'OK',msg)
+  send_object = 'POST /reqhistory' + http_res   
+  socketobject.send(send_object)
+  socketobject.close()
+
+# ------------------------------------------------------------------------------
+# Format history  
+# ---------------------------------------------------------------------------- 
+
+def format_history(string):
+  history = []
+  formatstring = string[1:-1].split('((')[1:]
+  for entry in formatstring:
+    vector_tuple = ()
+    rest = ()
+    splitentry = entry.split(')')
+    for vectorentry in (' ' + splitentry[0]).split(','):
+      vector_tuple += (int(vectorentry[1:]),)
+    rest = splitentry[1].split(',')  
+    lasttuple = (int(rest[3][2:]),)
+    for x in rest[4:]: 
+      lasttuple += (int(x[1:]),)
+    history.append(( vector_tuple,rest[1][2:-1],rest[2][2:-1],lasttuple ))
+  return history 
+
+# ------------------------------------------------------------------------------
+# Send history 
+# make sure 
+# ----------------------------------------------------------------------------  
+#def send_history(vid,history,end):
+#  if mycontext['global']:
+#    socketobject = openconn(vid,mycontext['port'])
+#  else:
+#    socketobject = openconn(mycontext['ip'],int(vid))
+#  msg = ("history="+str(history)
+#        +"&vectorclock="+str(mycontext['vector_clock'])
+#        +"&end="+str(end))    
+#  http_res = make_http_response(200,'OK',msg)
+#  send_object = 'POST /history' + http_res   
+#  #how to use sendall? 
+#  socketobject.send(send_object)
+#  socketobject.close()
+
+#def send_all_history(vid):
+# x = len(mycontext['history']) / 15
+# i = 0
+# while i < x: 
+##   send_history(vid,mycontext['history'][(i*15):(i*15+15)],0)
+#   i+=1 
+# else: 
+#   send_history(vid,mycontext['history'][(i*15):(i*15+15)],1)
+
+def send_history(vid,history):
+  if mycontext['global']:
+    socketobject = openconn(vid,mycontext['port'])
+  else:
+    socketobject = openconn(mycontext['ip'],int(vid))
+  msg = "history="+str(history)+"&vectorclock="+str(mycontext['vector_clock'])
+  http_res = make_http_response(200,'OK',msg)
+  send_object = 'POST /history' + http_res
+  fromByte = 0 
+  while(fromByte<len(send_object)):
+    fromByte += socketobject.send(send_object[fromByte:])
+  socketobject.close() 
+#  send_object = 'POST /history' + http_res 
+
+
+
+# ------------------------------------------------------------------------------
+# Send message to other vessels. Try as many times as specified by testnmbr
 # ----------------------------------------------------------------------------  
 
-def send_to_vessels(entry,entryID,action,testnmbr):
+def send_to_vessels(entry,entryID,action,vector_tuple,testnmbr):
   for sock in mycontext['vessels']:
-    send_to_vessel(entry,entryID,action,testnmbr,sock)
+    send_to_vessel(entry,entryID,action,vector_tuple,testnmbr,sock)
 
-def send_to_vessel(entry,entryID,action,testnmbr,sock):
-  try:
-    if action == 1: 
-      socketobject = openconn(sock[0],int(sock[1]))
-      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+str(entryID))
-      send_object = 'POST /neighbour/entries ' + http_res
-    elif action == 2:   
-      socketobject = openconn(sock[0],int(sock[1]))    
-      http_res = make_http_response(200,'OK',"entryID="+str(entryID))
-      send_object = 'POST /neighbour/delete ' + http_res
-    elif action == 3:
-      socketobject = openconn(sock[0],int(sock[1]))
-      http_res = make_http_response(200, 'OK',"entry="+entry+"&entryID="+str(entryID))
-      send_object = 'POST /neighbour/modify' + http_res 
+def send_to_vessel(entry,entryID,action,vector_tuple,testnmbr,sock):
+  try: 
+    msg = ("entry="+entry+"&entryID="
+    	     +str(entryID)+"&vid="+mycontext['identifier']
+    	     +"&vectorclock="+str(mycontext['vector_clock'])
+    	     +"&action="+action+"&vectortuple="+str(vector_tuple))
+    socketobject = openconn(sock[0],int(sock[1]))
+    http_res = make_http_response(200,'OK',msg)
+    send_object = 'POST /neighbour' + http_res   
     socketobject.send(send_object)
     socketobject.close()
   except:
-    print "error in connection"
     if(testnmbr != 0):
-      send_to_vessel(entry,entryID,action,testnmbr-1,sock)
+      send_to_vessel(entry,entryID,action,vector_tuple,testnmbr-1,sock)
+    else:
+      if mycontext['global']:
+        print "error in connection to vessel: " + sock[0]
+      else:
+        print "error in connection to vessel: " + sock[1]
 
-# ------------------------------------------------------------------------------
-# Initializes leader election
-# Election/startID/leaderID/randomNumber
-# ------------------------------------------------------------------------------
-def init_election(vessel):
-  sendVessel = get_send_vessel(vessel)
-  try:  
-    if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))
-    http_res = make_http_response(200, 'OK',"startID="+mycontext['identifier']+"&leaderID="+mycontext['identifier']+"&randomNumber="+str(mycontext['random']))
-    send_object = 'POST /election' + http_res 
-    socketobject.send(send_object)
-    socketobject.close()
-  except:
-    print "Tried: " + str(sendVessel) + " now trying next in list"
-    init_election(sendVessel)
-
-# ------------------------------------------------------------------------------
-# Forwards message 
-# Election/startID/leaderID/randomNumber
-# ------------------------------------------------------------------------------
-def forward_election(vessel,startID,leaderID,randomNumber):
-  sendVessel = get_send_vessel(vessel)
-  try:
-    if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))    
-    if mycontext['random'] > int(randomNumber):
-      randomNumber = str(mycontext['random'])
-      http_res = make_http_response(200, 'OK',"startID="+startID+"&leaderID="+mycontext['identifier']+"&randomNumber="+randomNumber)
-    else:
-      http_res = make_http_response(200, 'OK',"startID="+startID+"&leaderID="+str(leaderID)+"&randomNumber="+randomNumber)
-    send_object = 'POST /election' + http_res 
-    socketobject.send(send_object)  
-    socketobject.close()
-  except Exception, e:
-    print "Exception foward_message: %s, %s\n" %(type(e), e)
-    forward_election(sendVessel,startID,leaderID,randomNumber)
-
-# ------------------------------------------------------------------------------
-# Starts to send coordination message 
-# Coordination/startID/leaderID
-# ------------------------------------------------------------------------------
-def start_coordination(vessel):
-  sendVessel = get_send_vessel(vessel)
-  try:
-    if mycontext['global']: 
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))
-    http_res = make_http_response(200, 'OK',"startID="+mycontext['identifier']+"&leaderID="+mycontext['leader'])
-    send_object = 'POST /coordination' + http_res 
-    socketobject.send(send_object) 
-    socketobject.close()
-  except Exception, e:
-    print "Exception foward_message: %s, %s\n" %(type(e), e)
-    start_coordination(sendVessel)
-
-# ------------------------------------------------------------------------------
-# Starts to send coordination message 
-# Coordination/startID/leaderID
-# ------------------------------------------------------------------------------
-def forward_coordination(vessel,startID,leaderID):
-  sendVessel = get_send_vessel(vessel)
-  try:
-    if mycontext['global']:
-      socketobject = openconn(sendVessel,mycontext['port'])
-    else:
-      socketobject = openconn(mycontext['ip'],int(sendVessel))
-    http_res = make_http_response(200, 'OK',"startID="+startID+"&leaderID="+leaderID)
-    send_object = 'POST /coordination' + http_res 
-    socketobject.send(send_object) 
-    socketobject.close()
-  except Exception, e:
-    print "Exception foward_message: %s, %s\n" %(type(e), e)	
-    forward_coordination(sendVessel,startID,leaderID) 
-# ------------------------------------------------------------------------------
-# Updates IP/port to send to on the ring
-# ------------------------------------------------------------------------------
-def get_send_vessel(vessel):
-  return mycontext['ring'][(mycontext['ring'].index(vessel)+1)%len(mycontext['ring'])]
-
-# ------------------------------------------------------------------------------
-# Sending message to the leader 
-# action = 1 : INSERT  
-# action = 2 : DELETE
-# action = 3 : MODIFY
-# ----------------------------------------------------------------------------  
-# ------------------------------------------------------------------------------
-def send_to_leader(entry,entryID,action,testnmbr):
-  print "-------------in send to leader-------------"
-  try:
-    if mycontext['global']:
-      socketobject = openconn(mycontext['leader'],mycontext['port']) 
-    else:
-      socketobject = openconn(mycontext['ip'],int(mycontext['leader']))
-    if(action == 1):
-      http_res = make_http_response(200,'OK', "entry="+entry)
-      send_object = 'POST /leader/entries ' + http_res
-      #socketobject.send('ReceiveAsLeader' + '/INSERT/'  + entry)
-    elif(action == 2):
-      http_res = make_http_response(200,'OK', "entryID="+entryID)
-      send_object = 'POST /leader/delete ' + http_res
-      #socketobject.send('ReceiveAsLeader' + '/DELETE/'  + entryID) 
-    elif(action ==3):
-      http_res = make_http_response(200,'OK', "entry="+entry+"&entryID="+entryID)
-      send_object = 'POST /leader/modify ' + http_res
-      #socketobject.send('ReceiveAsLeader' + '/MODIFY/'  + entryID + '/' + entry)
-    socketobject.send(send_object)
-    socketobject.close()
-  except Exception, e:
-    print "Exception send_to_leader: %s, %s\n" %(type(e), e)	
-    send_to_leader(entry,entryID,action,testnmbr-1)
 # ------------------------------------------------------------------------------
 # Handles initial GET request from browser, outputs HTML string and closes socket.
 # ------------------------------------------------------------------------------
 def other_requests_handler(msgheader, sockobj, thiscommhandle):
   # extract the query from the HTTP request  
   query = extract_http_request_contents(msgheader)
-  print query
+  #print query
   # extract the query parameters
   parameters = extract_parameters_from_query(query)
-  print parameters
-  print parameters['entry']
+  #print parameters
+  #print parameters['entry']
   
   # Do not mix HTML code with the server code as done here. This is a bad practice
   template=file("no_answer_template.html").read()
@@ -403,8 +628,9 @@ def extract_parameters_from_query(msg):
 def generate_html_page():
   
   # dynamic title showing Ip address, port and up time. 
-  title='Sample board @ %s:%d. Up time: %d Leader: %s My random: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()),mycontext['leader'], mycontext['random'] )
+  title='Sample board @ %s:%d. Up time: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()))
   content = mycontext['boardcontents_template'] %( title, mycontext['entries'] )
+  content += str(mycontext['vector_clock'])
   fullpage_h = mycontext['frontpage_header_template'] + content
   fullpage = fullpage_h + mycontext['frontpage_footer_template'] % mycontext['authors']
   #print entries, content, fullpage
@@ -432,49 +658,85 @@ if callfunc == 'initialize':
   else:
     raise Exception("Usage: python <path to repy.py> <path to restrictions.default> skeleton2016.repy <port> [ip (optional)]")
   
-  #Own variables
-  #global variable for entries
+  #Global variable for entries
   mycontext['entries'] = ""
   
-  #count entries 
+  #Count entries 
   mycontext['id'] = 0
   
   #Vessels on the same network
-  #'ids' is used for looping the hash   
-  mycontext['ids'] = []
   idhash = {}
   mycontext['idhash'] = idhash 
+
+  # Other vessels to send to 
   mycontext['vessels'] = []
-  mycontext['ring'] = []
+
+  # Ring-topology for electing leader 
+  vector_clock = {}
+  mycontext['vector_clock'] =  vector_clock
+  mycontext['vector_tuple'] = ()
+  mycontext['rollback_history'] = []
+  mycontext['place_in_vector'] = 0
+  mycontext['remote_history'] = []
+  mycontext['action_queue'] = []
+  mycontext['buff'] = []
+
   mycontext['random'] = int(10000*randomfloat())
   mycontext['stoplock'] = getlock()
-  #mycontext['sendVessel'] = 0
+
+	# Logical clock
+  mycontext['lclock'] = 0
+
+  # Used to simplify global/local testing 
   mycontext['global'] = False
+
   #Initialize Port and IP
   mycontext['port'] = port
   mycontext['ip'] = ip
+
+  #Either unique port or ip-address
   mycontext['identifier']=''
-	
+
+  #List for local history
+  mycontext['history'] = []
+
+  mycontext['debugsleep'] = False
+
+
+	#Read ports(locally) or ip-addresses(globally)
+	#from a file
   if mycontext['global']:
-    vessels = file("neighborlist.txt").read().split()
-    mycontext['identifier'] = str(ip) 
+    if ip == '202.141.161.43':
+      vessels = file("neighborlist1.txt").read().split()
+    elif ip == '195.113.161.83':
+      vessels = file("neighborlist2.txt").read().split()
+    elif ip == '128.112.139.19': 
+      vessels = file("neighborlist3.txt").read().split()
+    #vessels = file("neighborlist.txt").read().split()
+    mycontext['identifier'] = str(ip)
     for line in vessels:
-      print line 
-      mycontext['ring'].append(line)
+      mycontext['vector_clock'][line] = 0
+      mycontext['vector_tuple']= mycontext['vector_tuple'] + (0,)
       if(ip != line):
-        mycontext['vessels'].append((line,mycontext['port']))
+        mycontext['vessels'].append((line,mycontext['port'])) 
   else:
+    if port == 63118:
+      vesselsseg = file("localports1.txt").read().split()
+    elif port == 63119:
+      vesselsseg = file("localports2.txt").read().split()
+    elif port == 63120: 
+      vesselsseg = file("localports3.txt").read().split()
     vessels = file("localports.txt").read().split()
     mycontext['identifier'] = str(port)
-    for line in vessels:
-      mycontext['ring'].append(line)
+    for line in vesselsseg: 
       if(str(port) != line):
         mycontext['vessels'].append((mycontext['ip'],line))
+    for line in vessels:
+      mycontext['vector_clock'][line] = 0
+      mycontext['vector_tuple'] = mycontext['vector_tuple'] + (0,)
 
- 
 
-  
-  
+
   #read html template files
   mycontext['entry_template'] = file("entry_template.html").read()
   mycontext['boardcontents_template'] = file("boardcontents_template.html").read()
@@ -484,4 +746,4 @@ if callfunc == 'initialize':
   mycontext['authors'] = "sample author"
 
   start_board()
-  
+
