@@ -86,7 +86,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
 
     #----Add entry(sent from browser)----
     elif msgheader.startswith( 'POST /board' ):
-      #mycontext['stoplock'].acquire()
+      mycontext['stoplock'].acquire()
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)  
       mycontext['vector_clock'][mycontext['identifier']]+=1
@@ -95,26 +95,29 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       add_action = (vector_tuple,"ADD",parameters['entry'],entryID)
       mycontext['history'].append(add_action)
       do_action(add_action)
-      #mycontext['stoplock'].release() 
+       
       if not mycontext['debugsleep']:
-        send_to_vessels(parameters['entry'],vector_tuple,"ADD",entryID,1)
+        send_to_vessels(parameters['entry'],vector_tuple,"ADD",entryID,3)
       
       res=make_http_response(200,'OK','')
       sockobj.send(res)
       stopcomm(thiscommhandle)
+      mycontext['stoplock'].release()
 
     #----Delete or Modify entry(sent from browser)---- 
     elif msgheader.startswith( 'POST /entries' ):
-      #mycontext['stoplock'].acquire()
+      mycontext['stoplock'].acquire()
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entryID = int(msgheader.split('/')[2].split(' ')[0])
       entryID = reverse_id(entryID)
       
       if 0 > entryID:
+        
       	res = make_http_response(200,'OK','')
         sockobj.send(res)
         stopcomm(thiscommhandle)
+        mycontext['stoplock'].release()
         return
 
       mycontext['vector_clock'][mycontext['identifier']]+=1
@@ -123,17 +126,17 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       	delete_action=(vector_tuple,"DELETE",parameters['entry'],entryID) 
       	mycontext['history'].append(delete_action)
       	do_action(delete_action,)
-        #mycontext['stoplock'].release()
+        mycontext['stoplock'].release()
         if not mycontext['debugsleep']:
-          send_to_vessels("", entryID, "DELETE",vector_tuple,1)
+          send_to_vessels("", entryID, "DELETE",vector_tuple,3)
   
       elif parameters['delete']==str(0): 
         modify_action=(vector_tuple,"MODIFY",parameters['entry'],entryID)
         mycontext['history'].append(modify_action)
         do_action(modify_action)
-        #mycontext['stoplock'].release()
+        mycontext['stoplock'].release()
         if not mycontext['debugsleep']:         
-          send_to_vessels(parameters['entry'], entryID, "MODIFY",vector_tuple,1)
+          send_to_vessels(parameters['entry'], entryID, "MODIFY",vector_tuple,3)
       
       res = make_http_response(200,'OK','')
       sockobj.send(res)
@@ -147,6 +150,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
         sockobj.send(res)
         stopcomm(thiscommhandle)
         return	
+      mycontext['stoplock'].acquire()
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       entry=parameters['entry']
@@ -160,6 +164,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       remote_history = []
       
       if is_doublet(vector_tuple):
+        mycontext['stoplock'].release()
       	return
 
       if behindSize == 1 and aheadSize == 0:
@@ -175,14 +180,19 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
         #aheadSize > 0:
       	request_history(vid, behindSize)
       	send_history(vid,mycontext['history'])
+      mycontext['stoplock'].release()
       
 
     elif msgheader.startswith('POST /reqhistory'):
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       size = int(parameters['size'])
+      mycontext['stoplock'].acquire()
       send_history(parameters['id'],mycontext['history'])
+      mycontext['stoplock'].release()
+
     elif msgheader.startswith('POST /history'):
+      mycontext['stoplock'].acquire()
       query = extract_http_request_contents(msgheader)
       parameters = extract_parameters_from_query(query)
       remote_clock = format_to_dict(parameters['vectorclock'])
@@ -199,6 +209,7 @@ def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle
       redo_history()
       update_clock(remote_clock)
       #print mycontext['history']
+      mycontext['stoplock'].release()
 
     if not msgheader.startswith( 'GET' ):
       print_board()
@@ -265,9 +276,10 @@ def redo_history():
   mycontext['idhash']={}
   mycontext['id']=0
   for action in mycontext['action_queue']: 
-    if do_action(action) != 0:
+    do_action(action)
+    #if do_action(action) != 0:
       # the action failed, and should be removed from history 
-      temphistory.remove(action)
+      #temphistory.remove(action)
   mycontext['history']=temphistory
 
 # ------------------------------------------------------------------------------
@@ -377,9 +389,6 @@ def remove_duplets(remote_history,local_history):
     if doublet:
       remote_history.remove(local_action)
   return remote_history
-  
-
-
 
 # ------------------------------------------------------------------------------
 # merge histories 
@@ -706,13 +715,13 @@ if callfunc == 'initialize':
 	#Read ports(locally) or ip-addresses(globally)
 	#from a file
   if mycontext['global']:
-    if ip == '202.141.161.43':
-      vessels = file("neighborlist1.txt").read().split()
-    elif ip == '195.113.161.83':
-      vessels = file("neighborlist2.txt").read().split()
-    elif ip == '128.112.139.19': 
-      vessels = file("neighborlist3.txt").read().split()
-    #vessels = file("neighborlist.txt").read().split()
+    #if ip == '202.141.161.43':
+    #  vessels = file("neighborlist1.txt").read().split()
+    #elif ip == '195.113.161.83':
+    #  vessels = file("neighborlist2.txt").read().split()
+    #elif ip == '128.112.139.19': 
+    #  vessels = file("neighborlist3.txt").read().split()
+    vessels = file("neighborlist.txt").read().split()
     mycontext['identifier'] = str(ip)
     for line in vessels:
       mycontext['vector_clock'][line] = 0
@@ -720,11 +729,11 @@ if callfunc == 'initialize':
       if(ip != line):
         mycontext['vessels'].append((line,mycontext['port'])) 
   else:
-    if port == 63118:
+    if port == 63118 or port == 63122:
       vesselsseg = file("localports1.txt").read().split()
     elif port == 63119:
       vesselsseg = file("localports2.txt").read().split()
-    elif port == 63120: 
+    elif port == 63120 or port == 63121 or port == 63123: 
       vesselsseg = file("localports3.txt").read().split()
     vessels = file("localports.txt").read().split()
     mycontext['identifier'] = str(port)

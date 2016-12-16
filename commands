@@ -7,8 +7,8 @@ upload board_frontpage_footer_template.html
 upload board_frontpage_header_template.html
 upload entry_template.html
 upload html_snapshot.html
+upload neighborlist.txt
 upload neighborlist1.txt
-upload neighborlist2.txt 
-upload neighborlist3.txt  
+upload neighborlist2.txt
+upload neighborlist3.txt
 run skeleton2016.repy 63159
-
